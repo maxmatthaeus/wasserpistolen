@@ -171,7 +171,7 @@ class Entity {
     if (this.state === 'normal') {
       const st = this.nearStation();
       if (this.water < 10 && st === WATER) this.water = 10;
-      if (this.charge < 10 && st === OUTLET) { this.state='charging'; this.chargeTimer=5; this.invul=true; }
+      if (this.charge < 10 && st === OUTLET) { this.state='charging'; this.chargeTimer=3; this.invul=true; }
     }
     if (!this.doubleShot && this.alive) {
       if (this.state === 'normal' && this.onUpgradeTile()) {
@@ -603,7 +603,11 @@ function loop(ts) {
       p.update(dt); if (!p.alive) continue;
       for (const ent of all) {
         if (ent===p.owner||!ent.alive||ent.team===p.owner.team) continue;
-        if (Math.hypot(ent.x-p.x,ent.y-p.y)<0.45) { ent.takeDmg(p.dmg); p.alive=false; break; }
+        if (Math.hypot(ent.x-p.x,ent.y-p.y)<0.45) {
+          ent.takeDmg(p.dmg);
+          if (!ent.alive) p.owner.lives = 10;
+          p.alive=false; break;
+        }
       }
     }
     projs=projs.filter(p=>p.alive);
