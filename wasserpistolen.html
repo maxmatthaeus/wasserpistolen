@@ -43,7 +43,7 @@ resize();
 window.addEventListener('resize', resize);
 
 // ─── Map ─────────────────────────────────────────────────────
-const FLOOR = 0, WALL = 1, WATER = 2, OUTLET = 3;
+const FLOOR = 0, WALL = 1, WATER = 2, OUTLET = 3, UPGRADE = 4;
 let map = [];
 
 function buildMap() {
@@ -59,6 +59,7 @@ function buildMap() {
   [[2,2],[13,2],[2,13],[13,13]].forEach(([x,y]) => map[y][x] = WATER);
   map[6][4] = OUTLET;
   map[9][11] = OUTLET;
+  map[8][8] = UPGRADE;
 }
 
 function toSc(wx, wy) {
@@ -75,9 +76,9 @@ function walkable(wx, wy) {
 
 // ─── Projectile ───────────────────────────────────────────────
 class Proj {
-  constructor(x, y, angle, owner) {
+  constructor(x, y, angle, owner, dmg=1) {
     this.x = x; this.y = y;
-    this.angle = angle; this.owner = owner;
+    this.angle = angle; this.owner = owner; this.dmg = dmg;
     this.speed = 9; this.alive = true; this.trail = [];
   }
   update(dt) {
@@ -95,9 +96,10 @@ class Proj {
       ctx.beginPath(); ctx.arc(ts.x, ts.y, TS*0.04, 0, Math.PI*2); ctx.fill();
     }
     const s = toSc(this.x, this.y);
-    ctx.shadowColor = '#0ef'; ctx.shadowBlur = 8;
-    ctx.fillStyle = '#0ef';
-    ctx.beginPath(); ctx.arc(s.x, s.y, TS*0.075, 0, Math.PI*2); ctx.fill();
+    const col = this.dmg > 1 ? '#e0e' : '#0ef';
+    ctx.shadowColor = col; ctx.shadowBlur = 8;
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(s.x, s.y, TS*(this.dmg>1?0.1:0.075), 0, Math.PI*2); ctx.fill();
     ctx.shadowBlur = 0;
   }
 }
@@ -113,6 +115,7 @@ class Entity {
     this.shootCd = 0; this.hitFlash = 0; this.walkCycle = 0;
     this.aiState = 'patrol'; this.aiTarget = null; this.aiTimer = 0;
     this.wanderPt = {x, y};
+    this.doubleShot = false; this.upgradeTimer = 0;
   }
   get alive() { return this.lives > 0; }
   bodyColor() {
@@ -134,11 +137,11 @@ class Entity {
   shoot() {
     if (this.water<=0||this.charge<=0||this.state!=='normal'||this.shootCd>0) return null;
     this.water--; this.charge--; this.shootCd = 0.28;
-    return new Proj(this.x, this.y, this.angle, this);
+    return new Proj(this.x, this.y, this.angle, this, this.doubleShot ? 2 : 1);
   }
-  takeDmg() {
+  takeDmg(dmg=1) {
     if (this.invul || !this.alive) return false;
-    this.lives = Math.max(0, this.lives - 1);
+    this.lives = Math.max(0, this.lives - dmg);
     this.hitFlash = 0.22;
     if (this.lives === 0) this.state = 'dead';
     return true;
@@ -154,6 +157,10 @@ class Entity {
     }
     return null;
   }
+  onUpgradeTile() {
+    const gx = Math.floor(this.x), gy = Math.floor(this.y);
+    return gx>=0&&gy>=0&&gx<G&&gy<G&&map[gy][gx]===UPGRADE;
+  }
   update(dt) {
     if (this.shootCd > 0) this.shootCd -= dt;
     if (this.hitFlash > 0) this.hitFlash -= dt;
@@ -165,6 +172,14 @@ class Entity {
       const st = this.nearStation();
       if (this.water < 10 && st === WATER) this.water = 10;
       if (this.charge < 10 && st === OUTLET) { this.state='charging'; this.chargeTimer=5; this.invul=true; }
+    }
+    if (!this.doubleShot && this.alive) {
+      if (this.state === 'normal' && this.onUpgradeTile()) {
+        this.upgradeTimer += dt;
+        if (this.upgradeTimer >= 2) this.doubleShot = true;
+      } else {
+        this.upgradeTimer = 0;
+      }
     }
   }
   updateAI(dt, all) {
@@ -257,6 +272,13 @@ class Entity {
       ctx.beginPath(); ctx.ellipse(0,0,rw*3.8,rh*2.6,0,0,Math.PI*2); ctx.stroke();
     }
 
+    // Upgrade charge-up ring
+    if (this.upgradeTimer > 0 && !this.doubleShot) {
+      const frac = Math.min(1, this.upgradeTimer/2);
+      ctx.strokeStyle='#ffd200'; ctx.lineWidth=3*sc; ctx.lineCap='round';
+      ctx.beginPath(); ctx.arc(0,0,rw*3.2,-Math.PI/2,-Math.PI/2+frac*Math.PI*2); ctx.stroke();
+    }
+
     // Head
     ctx.fillStyle=skin;
     ctx.beginPath(); ctx.ellipse(0,-rh*2.1+wob*0.3,rw*1.4,rh,0,0,Math.PI*2); ctx.fill();
@@ -283,6 +305,12 @@ class Entity {
 
     // Gun
     drawGun(ctx, armTx+gdx*0.5, armTy+gdy*0.5-rh*0.2, Math.atan2(gdy,gdx), flash, sc);
+
+    // Double-shot badge
+    if (this.doubleShot && !flash) {
+      ctx.fillStyle='#e0e'; ctx.font=`bold ${Math.max(8,9*sc)}px monospace`; ctx.textAlign='center';
+      ctx.fillText('2×', rw*1.8, -rh*3.2);
+    }
 
     // Name
     const teamCol2=this.team===0?'#22cc44':'#ff6600';
@@ -362,6 +390,15 @@ function drawTile(gx, gy) {
     ctx.beginPath(); ctx.arc(cx+TS*0.08,cy,TS*0.045,0,Math.PI*2); ctx.fill();
     ctx.fillStyle='#ffe000'; ctx.font=`${Math.max(8,TS*0.4)}px serif`; ctx.textAlign='center';
     ctx.fillText('⚡',cx,cy+TS*0.35);
+  } else if (type===UPGRADE) {
+    ctx.fillStyle='#2a3a2a'; ctx.fillRect(s.x,s.y,TS,TS);
+    const pulse=(Math.sin(Date.now()*0.004)+1)/2;
+    ctx.strokeStyle=`rgba(255,210,0,${0.5+pulse*0.4})`; ctx.lineWidth=Math.max(2,TS*0.05);
+    ctx.beginPath(); ctx.arc(cx,cy,TS*0.4,0,Math.PI*2); ctx.stroke();
+    ctx.fillStyle='rgba(255,210,0,0.15)';
+    ctx.beginPath(); ctx.arc(cx,cy,TS*0.4,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#ffd200'; ctx.font=`bold ${Math.max(9,TS*0.32)}px monospace`; ctx.textAlign='center';
+    ctx.fillText('2×',cx,cy+TS*0.11);
   }
 }
 
@@ -474,6 +511,8 @@ function drawHUD() {
   if (player.state==='charging') { stTxt=`⚡ ${player.chargeTimer.toFixed(1)}s`; stCol='#ff0'; }
   else if (player.charge<=0)    { stTxt='⚡ Steckdose!'; stCol='#f80'; }
   else if (player.water<=0)     { stTxt='💧 Wassersäule!'; stCol='#0af'; }
+  else if (player.upgradeTimer>0 && !player.doubleShot) { stTxt=`2× Upgrade ${player.upgradeTimer.toFixed(1)}/2.0s`; stCol='#ffd200'; }
+  else if (player.doubleShot)   { stTxt='2× Doppelschuss aktiv'; stCol='#e0e'; }
   else                          { stTxt='Bereit'; stCol='#0f8'; }
   ctx.fillStyle=stCol; ctx.font=`bold ${fs}px monospace`; ctx.textAlign='center';
   ctx.fillText(stTxt, CW/2, HUD_H*0.65);
@@ -564,7 +603,7 @@ function loop(ts) {
       p.update(dt); if (!p.alive) continue;
       for (const ent of all) {
         if (ent===p.owner||!ent.alive||ent.team===p.owner.team) continue;
-        if (Math.hypot(ent.x-p.x,ent.y-p.y)<0.45) { ent.takeDmg(); p.alive=false; break; }
+        if (Math.hypot(ent.x-p.x,ent.y-p.y)<0.45) { ent.takeDmg(p.dmg); p.alive=false; break; }
       }
     }
     projs=projs.filter(p=>p.alive);
