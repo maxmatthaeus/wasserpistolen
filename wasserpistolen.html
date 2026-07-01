@@ -116,6 +116,7 @@ class Entity {
     this.aiState = 'patrol'; this.aiTarget = null; this.aiTimer = 0;
     this.wanderPt = {x, y};
     this.doubleShot = false; this.upgradeTimer = 0;
+    this.path = []; this.pathGoal = null; this.pathTimer = 0;
   }
   get alive() { return this.lives > 0; }
   bodyColor() {
@@ -198,9 +199,9 @@ class Entity {
     }
     let newP = null;
     if (this.aiState === 'outlet') {
-      const g = findTile(this, OUTLET); if (g) this.moveToward(g.x+0.5, g.y+0.5, dt);
+      const g = findTile(this, OUTLET); if (g) this.followPath(g.x, g.y, dt);
     } else if (this.aiState === 'waterpt') {
-      const g = findTile(this, WATER); if (g) this.moveToward(g.x+0.5, g.y+0.5, dt);
+      const g = findTile(this, WATER); if (g) this.followPath(g.x, g.y, dt);
     } else if (this.aiState === 'hunt' && this.aiTarget && this.aiTarget.alive) {
       const t = this.aiTarget;
       const dist = Math.hypot(t.x-this.x, t.y-this.y);
@@ -227,6 +228,17 @@ class Entity {
   moveToward(tx, ty, dt) {
     const dx=tx-this.x, dy=ty-this.y, len=Math.hypot(dx,dy);
     if (len>0.05) { this.angle=Math.atan2(dy,dx); this.tryMove(dx/len,dy/len,dt); }
+  }
+  followPath(gx, gy, dt) {
+    if (!this.pathGoal || this.pathGoal.x!==gx || this.pathGoal.y!==gy || this.pathTimer<=0) {
+      this.path = computePath(Math.floor(this.x), Math.floor(this.y), gx, gy) || [];
+      this.pathGoal = {x:gx, y:gy};
+      this.pathTimer = 1.2;
+    }
+    this.pathTimer -= dt;
+    while (this.path.length && Math.hypot(this.path[0].x-this.x, this.path[0].y-this.y) < 0.3) this.path.shift();
+    if (this.path.length) this.moveToward(this.path[0].x, this.path[0].y, dt);
+    else this.moveToward(gx+0.5, gy+0.5, dt);
   }
   draw() {
     if (!this.alive) return;
@@ -350,6 +362,38 @@ function drawGun(ctx, cx, cy, angle, flash, sc=1) {
   ctx.fillStyle=flash?'#fff':'rgba(230,248,255,0.9)';
   ctx.beginPath(); ctx.ellipse(6*s,-11*s,3.3*s,1.8*s,0,0,Math.PI*2); ctx.fill();
   ctx.restore();
+}
+
+function computePath(sx, sy, gx, gy) {
+  const key=(x,y)=>x+','+y;
+  if (sx===gx && sy===gy) return [];
+  const visited = new Set([key(sx,sy)]);
+  const parent = {};
+  const queue = [[sx,sy]];
+  let qi = 0, found = false;
+  while (qi < queue.length && !found) {
+    const [cx,cy] = queue[qi++];
+    for (const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+      const nx=cx+dx, ny=cy+dy;
+      if (nx<0||ny<0||nx>=G||ny>=G) continue;
+      if (map[ny][nx]===WALL) continue;
+      const k=key(nx,ny);
+      if (visited.has(k)) continue;
+      visited.add(k); parent[k]=key(cx,cy); queue.push([nx,ny]);
+      if (nx===gx && ny===gy) { found=true; break; }
+    }
+  }
+  if (!visited.has(key(gx,gy))) return null;
+  const path=[]; let cur=key(gx,gy);
+  const startKey=key(sx,sy);
+  while (cur !== startKey) {
+    const [px,py]=cur.split(',').map(Number);
+    path.push({x:px+0.5,y:py+0.5});
+    cur=parent[cur];
+    if (cur===undefined) break;
+  }
+  path.reverse();
+  return path;
 }
 
 function findTile(ent, type) {
