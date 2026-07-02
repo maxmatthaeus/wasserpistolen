@@ -21,6 +21,7 @@ const ctx = cv.getContext('2d');
 
 const G = 16;
 let CW, CH, TS, OX, OY, HUD_H, JOY_R, JOY_MAX, JOY_LX, JOY_LY, JOY_RX, JOY_RY;
+let HEAL_BTN_X, HEAL_BTN_Y, HEAL_BTN_R;
 
 function resize() {
   CW = cv.width  = window.innerWidth;
@@ -38,6 +39,9 @@ function resize() {
   JOY_LX = CW * 0.17;
   JOY_RX = CW * 0.83;
   JOY_LY = JOY_RY = CH - JOY_R - 14;
+  HEAL_BTN_X = (JOY_LX + JOY_RX) / 2;
+  HEAL_BTN_Y = JOY_LY;
+  HEAL_BTN_R = JOY_R * 0.6;
 }
 resize();
 window.addEventListener('resize', resize);
@@ -440,11 +444,25 @@ function joyDelta(j) {
   return {dx,dy,len};
 }
 
+// ─── Heal button (sunscreen bottle between the two joysticks) ─
+function healBtnAvailable() {
+  return gameState==='playing' && gameProgress.upgrades.has('heal') && !gameProgress.healUsed;
+}
+function healBtnHit(px, py) {
+  return Math.hypot(px-HEAL_BTN_X, py-HEAL_BTN_Y) <= HEAL_BTN_R;
+}
+function tryHealButtonTap(px, py) {
+  if (!healBtnAvailable() || !healBtnHit(px,py)) return false;
+  if (player.heal()) gameProgress.healUsed = true;
+  return true;
+}
+
 cv.addEventListener('touchstart', e => {
   e.preventDefault();
   if (gameState!=='playing') return;
   for (const t of e.changedTouches) {
     const tx=t.clientX, ty=t.clientY;
+    if (tryHealButtonTap(tx,ty)) continue;
     const side = tx < CW/2 ? 'L' : 'R';
     if (!joy[side].active) {
       joy[side].active=true; joy[side].id=t.identifier;
@@ -485,6 +503,7 @@ cv.addEventListener('click', e => {
   if (gameState==='upgrade') { handleUpgradeTap(px,py); return; }
   if (gameState==='result') { if (resultReady) startNewRun(); return; }
   if (gameState!=='playing') { return; }
+  if (tryHealButtonTap(px,py)) return;
   const p=player.shoot(); if(p) projs.push(...p);
 });
 
@@ -539,7 +558,7 @@ function drawHUD() {
   if (player.state==='charging') { stTxt=`⚡ ${player.chargeTimer.toFixed(1)}s`; stCol='#ff0'; }
   else if (player.charge<=0)    { stTxt='⚡ Steckdose!'; stCol='#f80'; }
   else if (player.water<=0)     { stTxt='💧 Wassersäule!'; stCol='#0af'; }
-  else if (player.healCharges>0){ stTxt='💊 Heiltrank bereit'; stCol='#0f8'; }
+  else if (player.healCharges>0){ stTxt='🧴 Sonnencreme bereit'; stCol='#0f8'; }
   else                          { stTxt='Bereit'; stCol='#0f8'; }
   ctx.fillStyle=stCol; ctx.font=`bold ${fs}px monospace`;
   ctx.fillText(stTxt, CW/2, HUD_H*0.5);
@@ -580,12 +599,96 @@ function drawJoysticks() {
   });
 }
 
+// ─── Heal Button (sunscreen bottle, between the two joysticks) ─
+function drawHealButton() {
+  if (!gameProgress.upgrades.has('heal')) return;
+  const used = gameProgress.healUsed;
+  const cx = HEAL_BTN_X, cy = HEAL_BTN_Y, r = HEAL_BTN_R;
+
+  // Base ring
+  ctx.strokeStyle = used ? 'rgba(255,255,255,0.12)' : 'rgba(255,210,120,0.35)';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.stroke();
+  ctx.fillStyle = used ? 'rgba(255,255,255,0.03)' : 'rgba(255,210,120,0.08)';
+  ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.fill();
+
+  if (!used) {
+    const pulse=(Math.sin(Date.now()*0.006)+1)/2;
+    ctx.strokeStyle=`rgba(255,210,0,${0.35+pulse*0.35})`; ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.arc(cx,cy,r*0.94,0,Math.PI*2); ctx.stroke();
+  }
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.globalAlpha = used ? 0.4 : 1;
+
+  const bw = r*0.62, bh = r*1.05;
+  const bodyCol = used ? '#888' : '#fff6df';
+  const strokeCol = used ? '#555' : '#d8b56a';
+
+  // bottle body (rounded)
+  ctx.fillStyle = bodyCol; ctx.strokeStyle = strokeCol; ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(-bw/2, bh*0.15);
+  ctx.lineTo(-bw/2, bh*0.5);
+  ctx.quadraticCurveTo(-bw/2, bh*0.65, -bw/2+4, bh*0.65);
+  ctx.lineTo(bw/2-4, bh*0.65);
+  ctx.quadraticCurveTo(bw/2, bh*0.65, bw/2, bh*0.5);
+  ctx.lineTo(bw/2, bh*0.15);
+  ctx.closePath();
+  ctx.fill(); ctx.stroke();
+
+  // shoulder taper to neck
+  ctx.beginPath();
+  ctx.moveTo(-bw/2, bh*0.15);
+  ctx.lineTo(-bw*0.22, -bh*0.08);
+  ctx.lineTo(bw*0.22, -bh*0.08);
+  ctx.lineTo(bw/2, bh*0.15);
+  ctx.closePath();
+  ctx.fill(); ctx.stroke();
+
+  // flip cap
+  ctx.fillStyle = used ? '#666' : '#ff7a1a';
+  ctx.fillRect(-bw*0.22, -bh*0.3, bw*0.44, bh*0.24);
+  ctx.strokeRect(-bw*0.22, -bh*0.3, bw*0.44, bh*0.24);
+
+  // label band
+  ctx.fillStyle = used ? '#aaa' : '#ffdc73';
+  ctx.fillRect(-bw/2+2, bh*0.18, bw-4, bh*0.3);
+
+  // sun icon on label (sunscreen motif)
+  const sr = bh*0.09;
+  const sunCol = used ? '#777' : '#ff9d00';
+  ctx.fillStyle = sunCol;
+  ctx.beginPath(); ctx.arc(0, bh*0.33, sr, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = sunCol; ctx.lineWidth = 1.4;
+  for (let i=0;i<8;i++) {
+    const a = i/8*Math.PI*2;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a)*sr*1.5, bh*0.33+Math.sin(a)*sr*1.5);
+    ctx.lineTo(Math.cos(a)*sr*2.1, bh*0.33+Math.sin(a)*sr*2.1);
+    ctx.stroke();
+  }
+
+  ctx.globalAlpha = 1;
+
+  if (used) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.lineWidth = 2.5; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(-r*0.35,0); ctx.lineTo(-r*0.05,r*0.28); ctx.lineTo(r*0.4,-r*0.28); ctx.stroke();
+  }
+  ctx.restore();
+
+  ctx.fillStyle = used ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.55)';
+  ctx.font = `${Math.max(9,r*0.28)}px monospace`; ctx.textAlign='center';
+  ctx.fillText(used ? 'benutzt' : 'Heilung', cx, cy+r+16);
+}
+
 // ─── Upgrades ───────────────────────────────────────────────────
 const UPGRADES = [
   { id:'both',  icon:'⇄', label:'Doppel-Feuer',        desc:'Schiesst gleichzeitig vorwärts UND rückwärts' },
   { id:'right', icon:'➡', label:'Seitenschuss rechts', desc:'Schiesst zusätzlich im 90°-Winkel nach rechts' },
   { id:'left',  icon:'⬅', label:'Seitenschuss links',  desc:'Schiesst zusätzlich im 90°-Winkel nach links' },
-  { id:'heal',  icon:'💊', label:'Heiltrank',           desc:'Einmalig volles Leben — Doppelklick auf Zielen+Bewegen' },
+  { id:'heal',  icon:'🧴', label:'Sonnencreme',         desc:'Einmalig volles Leben — Knopf zwischen den Joysticks' },
 ];
 let pendingUpgrades = [];
 
@@ -642,21 +745,6 @@ function chooseUpgrade(id) {
   startLevel(gameProgress.level);
 }
 
-// ─── Heal combo (double "click" on aim+move) ───────────────────
-let comboLastPress = -Infinity, comboWasActive = false;
-
-function checkHealCombo(activeNow, ts) {
-  if (activeNow && !comboWasActive) {
-    if (ts - comboLastPress < 600) {
-      player.heal();
-      comboLastPress = -Infinity;
-    } else {
-      comboLastPress = ts;
-    }
-  }
-  comboWasActive = activeNow;
-}
-
 // ─── Game State ───────────────────────────────────────────────
 const LEVELS = 5;
 const AI_SPAWNS = [
@@ -683,7 +771,6 @@ function startLevel(level) {
   }
   projs=[]; gameState='playing';
   joy.L.active=false; joy.R.active=false;
-  comboLastPress=-Infinity; comboWasActive=false;
 }
 
 function startResult(type) {
@@ -909,12 +996,6 @@ function loop(ts) {
   if (keys['w']||keys['arrowup'])    kdy-=1;
   if (kdx||kdy) { const l=Math.hypot(kdx,kdy); player.tryMove(kdx/l,kdy/l,dt); }
 
-  // Heal activation: double "click" on aim+move (both joysticks, or move+aim/shoot on keyboard)
-  const touchBoth = joy.L.active && joy.R.active;
-  const kbMoving = !!(kdx||kdy) || ld.len>12;
-  const kbAiming = rd.len>12 || keys[' '] || keys['enter'];
-  checkHealCombo(touchBoth || (kbMoving && kbAiming), ts);
-
   // Shoot (right joystick auto)
   if (rd.len > JOY_R*0.35) { const p=player.shoot(); if(p) projs.push(...p); }
 
@@ -963,6 +1044,7 @@ function loop(ts) {
   rq.sort((a,b)=>a.d-b.d); rq.forEach(i=>i.fn());
 
   drawJoysticks();
+  drawHealButton();
   drawHUD();
 
   requestAnimationFrame(loop);
