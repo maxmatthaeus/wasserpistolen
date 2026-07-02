@@ -530,9 +530,6 @@ function joyDelta(j) {
 }
 
 // ─── Heal button (sunscreen bottle between the two joysticks) ─
-function maxHealCharges(upgradeSet) {
-  return (upgradeSet.has('heal') ? 1 : 0) + (upgradeSet.has('heal2') ? 1 : 0);
-}
 function healBtnAvailable() {
   return gameState==='playing' && player.healCharges > 0;
 }
@@ -641,12 +638,11 @@ function drawHUD() {
   ctx.textAlign='center'; ctx.fillStyle='#8ad'; ctx.font=`bold ${fs}px monospace`;
   ctx.fillText(`Level ${gameProgress.level}/${LEVELS}`, CW/2, HUD_H*0.24);
 
-  const maxHeal = maxHealCharges(gameProgress.upgrades);
   let stTxt='', stCol='#0f8';
   if (player.state==='charging') { stTxt=`⚡ ${player.chargeTimer.toFixed(1)}s`; stCol='#ff0'; }
   else if (player.charge<=0)    { stTxt='⚡ Steckdose!'; stCol='#f80'; }
   else if (player.water<=0)     { stTxt='💧 Wassersäule!'; stCol='#0af'; }
-  else if (player.healCharges>0){ stTxt = maxHeal>1 ? `🧴 Sonnencreme bereit (${player.healCharges}/${maxHeal})` : '🧴 Sonnencreme bereit'; stCol='#0f8'; }
+  else if (player.healCharges>0){ stTxt='🧴 Sonnencreme bereit'; stCol='#0f8'; }
   else                          { stTxt='Bereit'; stCol='#0f8'; }
   ctx.fillStyle=stCol; ctx.font=`bold ${fs}px monospace`;
   ctx.fillText(stTxt, CW/2, HUD_H*0.5);
@@ -688,8 +684,7 @@ function drawJoysticks() {
 
 // ─── Heal Button (sunscreen bottle, between the two joysticks) ─
 function drawHealButton() {
-  const maxCharges = maxHealCharges(gameProgress.upgrades);
-  if (maxCharges <= 0) return;
+  if (!gameProgress.upgrades.has('heal')) return;
   const used = player.healCharges <= 0;
   const cx = HEAL_BTN_X, cy = HEAL_BTN_Y, r = HEAL_BTN_R;
 
@@ -765,18 +760,6 @@ function drawHealButton() {
   }
   ctx.restore();
 
-  // Charge pips when more than one heal charge is available per level
-  if (maxCharges > 1) {
-    const pr = r*0.13, gap = pr*2.6;
-    const startX = cx - (maxCharges-1)*gap/2;
-    for (let i=0; i<maxCharges; i++) {
-      ctx.beginPath(); ctx.arc(startX+i*gap, cy-r*1.15, pr, 0, Math.PI*2);
-      ctx.fillStyle = i < player.healCharges ? '#ffd200' : 'rgba(255,255,255,0.2)';
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.lineWidth = 1; ctx.stroke();
-    }
-  }
-
   ctx.fillStyle = used ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.55)';
   ctx.font = `${Math.max(9,r*0.28)}px monospace`; ctx.textAlign='center';
   ctx.fillText(used ? 'benutzt' : 'Heilung', cx, cy+r+16);
@@ -784,11 +767,10 @@ function drawHealButton() {
 
 // ─── Upgrades ───────────────────────────────────────────────────
 const UPGRADES = [
-  { id:'both',  icon:'↔', label:'Doppel-Feuer',        desc:'Schiesst gleichzeitig vorwärts UND rückwärts' },
-  { id:'right', icon:'→', label:'Seitenschuss rechts', desc:'Schiesst zusätzlich im 90°-Winkel nach rechts' },
-  { id:'left',  icon:'←', label:'Seitenschuss links',  desc:'Schiesst zusätzlich im 90°-Winkel nach links' },
-  { id:'heal',  icon:'🧴', label:'Sonnencreme',         desc:'1× pro Level volles Leben — Knopf zwischen den Joysticks' },
-  { id:'heal2', icon:'🧴', label:'Sonnencreme Nachfüllung', desc:'Zweite Ladung Sonnencreme — 2× pro Level heilen' },
+  { id:'both',  icon:'↔', label:'Doppel-Feuer',        desc:'Schiesst vorwärts und rückwärts' },
+  { id:'right', icon:'→', label:'Seitenschuss rechts', desc:'Schiesst zusätzlich nach rechts' },
+  { id:'left',  icon:'←', label:'Seitenschuss links',  desc:'Schiesst zusätzlich nach links' },
+  { id:'heal',  icon:'🧴', label:'Sonnencreme',         desc:'Füllt 1× pro Level dein Leben auf' },
 ];
 let pendingUpgrades = [];
 
@@ -862,7 +844,7 @@ function startLevel(level) {
   buildMap();
   player = new Entity(1.5, 1.5, 'DU', false, 0, CONFIG.playerLives);
   player.shootDirs = computeShootDirs(gameProgress.upgrades);
-  player.healCharges = maxHealCharges(gameProgress.upgrades);
+  player.healCharges = gameProgress.upgrades.has('heal') ? 1 : 0;
   aiList = [];
   for (let i=0; i<level; i++) {
     const sp = AI_SPAWNS[i];
@@ -1062,7 +1044,7 @@ function drawResultScene(type, t) {
   ctx.font=`bold ${fs2}px monospace`;
   ctx.fillText(won?`🏆 Alle ${LEVELS} Level geschafft!`:'💧 Verloren!', CW/2, CH*0.13);
   ctx.font=`${fs2*0.45}px monospace`;
-  ctx.fillText(won?'Mitspieler geniesst die Sonne':'Mitspieler steht im Regen', CW/2, CH*0.13+fs2*0.6);
+  ctx.fillText(won?'Mattis geniesst die Sonne':'Mattis steht im Regen', CW/2, CH*0.13+fs2*0.6);
 
   if (!won) {
     ctx.fillStyle='#dfe6ee'; ctx.font=`bold ${Math.min(18,CW*0.024)}px monospace`;
