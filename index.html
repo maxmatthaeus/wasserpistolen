@@ -43,7 +43,7 @@ resize();
 window.addEventListener('resize', resize);
 
 // ─── Map ─────────────────────────────────────────────────────
-const FLOOR = 0, WALL = 1, WATER = 2, OUTLET = 3, UPGRADE = 4;
+const FLOOR = 0, WALL = 1, WATER = 2, OUTLET = 3;
 let map = [];
 
 function buildMap() {
@@ -59,7 +59,6 @@ function buildMap() {
   [[2,2],[13,2],[2,13],[13,13]].forEach(([x,y]) => map[y][x] = WATER);
   map[6][4] = OUTLET;
   map[9][11] = OUTLET;
-  map[8][8] = UPGRADE;
 }
 
 function toSc(wx, wy) {
@@ -76,9 +75,9 @@ function walkable(wx, wy) {
 
 // ─── Projectile ───────────────────────────────────────────────
 class Proj {
-  constructor(x, y, angle, owner, dmg=1) {
+  constructor(x, y, angle, owner) {
     this.x = x; this.y = y;
-    this.angle = angle; this.owner = owner; this.dmg = dmg;
+    this.angle = angle; this.owner = owner;
     this.speed = 9; this.alive = true; this.trail = [];
   }
   update(dt) {
@@ -96,10 +95,9 @@ class Proj {
       ctx.beginPath(); ctx.arc(ts.x, ts.y, TS*0.04, 0, Math.PI*2); ctx.fill();
     }
     const s = toSc(this.x, this.y);
-    const col = this.dmg > 1 ? '#e0e' : '#0ef';
-    ctx.shadowColor = col; ctx.shadowBlur = 8;
-    ctx.fillStyle = col;
-    ctx.beginPath(); ctx.arc(s.x, s.y, TS*(this.dmg>1?0.1:0.075), 0, Math.PI*2); ctx.fill();
+    ctx.shadowColor = '#0ef'; ctx.shadowBlur = 8;
+    ctx.fillStyle = '#0ef';
+    ctx.beginPath(); ctx.arc(s.x, s.y, TS*0.075, 0, Math.PI*2); ctx.fill();
     ctx.shadowBlur = 0;
   }
 }
@@ -116,7 +114,7 @@ class Entity {
     this.shootCd = 0; this.hitFlash = 0; this.walkCycle = 0;
     this.aiState = 'patrol'; this.aiTarget = null; this.aiTimer = 0;
     this.wanderPt = {x, y};
-    this.doubleShot = false; this.upgradeTimer = 0;
+    this.shootDirs = [0]; this.healCharges = 0; this.healFlash = 0;
     this.path = []; this.pathGoal = null; this.pathTimer = 0;
   }
   get alive() { return this.lives > 0; }
@@ -139,7 +137,14 @@ class Entity {
   shoot() {
     if (this.water<=0||this.charge<=0||this.state!=='normal'||this.shootCd>0) return null;
     this.water--; this.charge--; this.shootCd = 0.28;
-    return new Proj(this.x, this.y, this.angle, this, this.doubleShot ? 2 : 1);
+    return this.shootDirs.map(off => new Proj(this.x, this.y, this.angle+off, this));
+  }
+  heal() {
+    if (this.healCharges<=0 || !this.alive) return false;
+    this.healCharges = 0;
+    this.lives = this.maxLives;
+    this.healFlash = 0.6;
+    return true;
   }
   takeDmg(dmg=1) {
     if (this.invul || !this.alive) return false;
@@ -159,13 +164,10 @@ class Entity {
     }
     return null;
   }
-  onUpgradeTile() {
-    const gx = Math.floor(this.x), gy = Math.floor(this.y);
-    return gx>=0&&gy>=0&&gx<G&&gy<G&&map[gy][gx]===UPGRADE;
-  }
   update(dt) {
     if (this.shootCd > 0) this.shootCd -= dt;
     if (this.hitFlash > 0) this.hitFlash -= dt;
+    if (this.healFlash > 0) this.healFlash -= dt;
     if (this.state === 'charging') {
       this.chargeTimer -= dt;
       if (this.chargeTimer <= 0) { this.charge = 20; this.state = 'normal'; this.invul = false; }
@@ -174,14 +176,6 @@ class Entity {
       const st = this.nearStation();
       if (this.water < 10 && st === WATER) this.water = 10;
       if (this.charge < 10 && st === OUTLET) { this.state='charging'; this.chargeTimer=3; this.invul=true; }
-    }
-    if (!this.doubleShot && this.alive) {
-      if (this.state === 'normal' && this.onUpgradeTile()) {
-        this.upgradeTimer += dt;
-        if (this.upgradeTimer >= 2) this.doubleShot = true;
-      } else {
-        this.upgradeTimer = 0;
-      }
     }
   }
   updateAI(dt, all) {
@@ -247,6 +241,7 @@ class Entity {
     const sc = TS / 40;
     ctx.save(); ctx.translate(s.x, s.y);
     const flash = this.hitFlash > 0;
+    const heal = this.healFlash > 0;
     const col = flash ? '#fff' : this.bodyColor();
     const skin = flash ? '#fff' : '#f2c880';
     const ca = Math.cos(this.angle), sa = Math.sin(this.angle);
@@ -285,11 +280,10 @@ class Entity {
       ctx.beginPath(); ctx.ellipse(0,0,rw*3.8,rh*2.6,0,0,Math.PI*2); ctx.stroke();
     }
 
-    // Upgrade charge-up ring
-    if (this.upgradeTimer > 0 && !this.doubleShot) {
-      const frac = Math.min(1, this.upgradeTimer/2);
-      ctx.strokeStyle='#ffd200'; ctx.lineWidth=3*sc; ctx.lineCap='round';
-      ctx.beginPath(); ctx.arc(0,0,rw*3.2,-Math.PI/2,-Math.PI/2+frac*Math.PI*2); ctx.stroke();
+    // Heal pulse
+    if (heal) {
+      ctx.strokeStyle=`rgba(0,255,120,${this.healFlash/0.6})`; ctx.lineWidth=4*sc;
+      ctx.beginPath(); ctx.ellipse(0,0,rw*4.2,rh*3,0,0,Math.PI*2); ctx.stroke();
     }
 
     // Head
@@ -316,13 +310,9 @@ class Entity {
       ctx.beginPath(); ctx.arc(gdx*0.2+rw*0.45,-rh*2.1+gdy*0.1,rw*0.22,0,Math.PI*2); ctx.fill();
     }
 
-    // Gun
-    drawGun(ctx, armTx+gdx*0.5, armTy+gdy*0.5-rh*0.2, Math.atan2(gdy,gdx), flash, sc);
-
-    // Double-shot badge
-    if (this.doubleShot && !flash) {
-      ctx.fillStyle='#e0e'; ctx.font=`bold ${Math.max(8,9*sc)}px monospace`; ctx.textAlign='center';
-      ctx.fillText('2×', rw*1.8, -rh*3.2);
+    // Gun(s) — one per active shoot direction
+    for (const off of this.shootDirs) {
+      drawGun(ctx, armTx+gdx*0.5, armTy+gdy*0.5-rh*0.2, this.angle+off, flash, sc);
     }
 
     // Name
@@ -435,15 +425,6 @@ function drawTile(gx, gy) {
     ctx.beginPath(); ctx.arc(cx+TS*0.08,cy,TS*0.045,0,Math.PI*2); ctx.fill();
     ctx.fillStyle='#ffe000'; ctx.font=`${Math.max(8,TS*0.4)}px serif`; ctx.textAlign='center';
     ctx.fillText('⚡',cx,cy+TS*0.35);
-  } else if (type===UPGRADE) {
-    ctx.fillStyle='#2a3a2a'; ctx.fillRect(s.x,s.y,TS,TS);
-    const pulse=(Math.sin(Date.now()*0.004)+1)/2;
-    ctx.strokeStyle=`rgba(255,210,0,${0.5+pulse*0.4})`; ctx.lineWidth=Math.max(2,TS*0.05);
-    ctx.beginPath(); ctx.arc(cx,cy,TS*0.4,0,Math.PI*2); ctx.stroke();
-    ctx.fillStyle='rgba(255,210,0,0.15)';
-    ctx.beginPath(); ctx.arc(cx,cy,TS*0.4,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle='#ffd200'; ctx.font=`bold ${Math.max(9,TS*0.32)}px monospace`; ctx.textAlign='center';
-    ctx.fillText('2×',cx,cy+TS*0.11);
   }
 }
 
@@ -493,16 +474,18 @@ cv.addEventListener('touchend', e => {
 const keys={};
 document.addEventListener('keydown', e => {
   const k=e.key.toLowerCase(); keys[k]=true;
-  if (k==='r') showMenu();
-  if ((k===' '||k==='enter') && gameState==='playing') { const p=player.shoot(); if(p) projs.push(p); }
+  if (k==='r' && gameState!=='upgrade') startNewRun();
+  if ((k===' '||k==='enter') && gameState==='playing') { const p=player.shoot(); if(p) projs.push(...p); }
   e.preventDefault();
 });
 document.addEventListener('keyup', e => { keys[e.key.toLowerCase()]=false; });
 cv.addEventListener('click', e => {
   const r=cv.getBoundingClientRect(); const px=e.clientX-r.left, py=e.clientY-r.top;
   if (gameState==='menu') { handleMenuTap(px,py); return; }
-  if (gameState!=='playing') { showMenu(); return; }
-  const p=player.shoot(); if(p) projs.push(p);
+  if (gameState==='upgrade') { handleUpgradeTap(px,py); return; }
+  if (gameState==='result') { if (resultReady) startNewRun(); return; }
+  if (gameState!=='playing') { return; }
+  const p=player.shoot(); if(p) projs.push(...p);
 });
 
 // ─── HUD (drawn on canvas) ────────────────────────────────────
@@ -518,55 +501,56 @@ function drawHUD() {
   ctx.strokeStyle='#334'; ctx.lineWidth=1;
   ctx.beginPath(); ctx.moveTo(0,HUD_H); ctx.lineTo(CW,HUD_H); ctx.stroke();
 
-  const allEnt=[player,...aiList];
-  const bh=Math.max(5, HUD_H*0.1), bw=Math.max(35, CW*0.07);
   const fs=Math.max(9, Math.round(HUD_H*0.2));
+  const bh=Math.max(5, HUD_H*0.09);
 
-  function drawMember(e, x, y, align) {
-    const tCol=e.team===0?'#22cc44':'#ff6600';
-    const liveT=e.alive&&e.lives>1?1-(e.lives-1)/Math.max(1,e.maxLives-1):1;
-    const liveCol=e.alive?`rgb(${Math.round(220*(1-liveT))},15,${Math.round(220*liveT)})`:'#444';
-    ctx.font=`bold ${fs}px monospace`; ctx.textAlign=align;
-    ctx.fillStyle=e.alive?tCol:'#444';
-    const label=e.alive?`${e.name} ♥${e.lives}`:`${e.name} ☠`;
-    ctx.fillText(label, x+(align==='left'?0:0), y);
-    if (e.alive) {
-      const bx=align==='left'?x:x-bw;
-      miniBar(bx,y+2,bw,bh,e.lives/e.maxLives,liveCol);
-      miniBar(bx,y+bh+4,bw,bh,e.water/10,'#0099ff');
-      miniBar(bx,y+bh*2+8,bw,bh,e.charge/20,'#ffdd00');
-    }
-  }
+  // Player (left)
+  ctx.textAlign='left'; ctx.font=`bold ${fs+1}px monospace`;
+  ctx.fillStyle='#22cc44';
+  ctx.fillText(`🟢 DU  ${player.alive?'♥'+player.lives:'☠'}`, 8, HUD_H*0.3);
+  const bw0=Math.max(60, CW*0.16);
+  miniBar(8, HUD_H*0.38, bw0, bh, player.alive?player.lives/player.maxLives:0, '#e0154e');
+  miniBar(8, HUD_H*0.38+bh+3, bw0, bh, player.water/10, '#0099ff');
+  miniBar(8, HUD_H*0.38+(bh+3)*2, bw0, bh, player.charge/20, '#ffdd00');
 
-  const col0=allEnt.filter(e=>e.team===0);
-  const col1=allEnt.filter(e=>e.team===1);
-
-  // Team Mattis (left side)
-  ctx.fillStyle='#22cc44'; ctx.font=`bold ${fs+1}px monospace`; ctx.textAlign='left';
-  ctx.fillText('🟢 Team Mattis', 8, HUD_H*0.28);
-  col0.forEach((e,i)=>{
-    const bx=8+i*(bw+CW*0.035+fs*6.5);
-    drawMember(e, bx, HUD_H*0.5, 'left');
+  // Enemies (right) — compact row, scales with AI count
+  const n = aiList.length;
+  const areaW = CW*0.5;
+  const chipW = Math.max(28, Math.min(60, areaW/n - 6));
+  const rowW = n*(chipW+6)-6;
+  const rowX = CW-8-rowW;
+  ctx.textAlign='left'; ctx.fillStyle='#ff6600'; ctx.font=`bold ${fs+1}px monospace`;
+  ctx.fillText(`🟠 KI ${aiList.filter(e=>e.alive).length}/${n}`, rowX, HUD_H*0.3);
+  aiList.forEach((e,i) => {
+    const bx = rowX + i*(chipW+6);
+    const liveT = e.alive&&e.lives>1?1-(e.lives-1)/Math.max(1,e.maxLives-1):1;
+    const liveCol = e.alive?`rgb(${Math.round(220*(1-liveT))},15,${Math.round(220*liveT)})`:'#444';
+    ctx.textAlign='center'; ctx.fillStyle=e.alive?'#ff6600':'#444';
+    ctx.font=`bold ${Math.max(8,fs*0.8)}px monospace`;
+    ctx.fillText(e.alive?`♥${e.lives}`:'☠', bx+chipW/2, HUD_H*0.62);
+    miniBar(bx, HUD_H*0.68, chipW, bh, e.alive?e.lives/e.maxLives:0, liveCol);
   });
 
-  // Team B (right side)
-  ctx.fillStyle='#ff6600'; ctx.font=`bold ${fs+1}px monospace`; ctx.textAlign='right';
-  ctx.fillText('🟠 Team KI', CW-8, HUD_H*0.28);
-  col1.forEach((e,i)=>{
-    const bx=CW-8-i*(bw+CW*0.035+fs*6.5);
-    drawMember(e, bx, HUD_H*0.5, 'right');
-  });
+  // Center: level + status
+  ctx.textAlign='center'; ctx.fillStyle='#8ad'; ctx.font=`bold ${fs}px monospace`;
+  ctx.fillText(`Level ${gameProgress.level}/${LEVELS}`, CW/2, HUD_H*0.24);
 
-  // Status center
   let stTxt='', stCol='#0f8';
   if (player.state==='charging') { stTxt=`⚡ ${player.chargeTimer.toFixed(1)}s`; stCol='#ff0'; }
   else if (player.charge<=0)    { stTxt='⚡ Steckdose!'; stCol='#f80'; }
   else if (player.water<=0)     { stTxt='💧 Wassersäule!'; stCol='#0af'; }
-  else if (player.upgradeTimer>0 && !player.doubleShot) { stTxt=`2× Upgrade ${player.upgradeTimer.toFixed(1)}/2.0s`; stCol='#ffd200'; }
-  else if (player.doubleShot)   { stTxt='2× Doppelschuss aktiv'; stCol='#e0e'; }
+  else if (player.healCharges>0){ stTxt='💊 Heiltrank bereit'; stCol='#0f8'; }
   else                          { stTxt='Bereit'; stCol='#0f8'; }
-  ctx.fillStyle=stCol; ctx.font=`bold ${fs}px monospace`; ctx.textAlign='center';
-  ctx.fillText(stTxt, CW/2, HUD_H*0.65);
+  ctx.fillStyle=stCol; ctx.font=`bold ${fs}px monospace`;
+  ctx.fillText(stTxt, CW/2, HUD_H*0.5);
+
+  // Owned upgrade icons
+  if (gameProgress.upgrades.size) {
+    const icons = UPGRADES.filter(u=>gameProgress.upgrades.has(u.id))
+      .map(u => u.id==='heal' ? (gameProgress.healUsed ? u.icon+'✗' : u.icon) : u.icon);
+    ctx.fillStyle='#ffd200'; ctx.font=`bold ${fs}px monospace`;
+    ctx.fillText(icons.join('  '), CW/2, HUD_H*0.76);
+  }
 }
 
 // ─── Joystick Visuals ─────────────────────────────────────────
@@ -596,36 +580,124 @@ function drawJoysticks() {
   });
 }
 
-// ─── Game State ───────────────────────────────────────────────
-let player, aiList, projs, gameState, lastT;
-const DIFFICULTIES = {
-  leicht:    { label:'Leicht',    mult:0.5, col:'#22cc44' },
-  mittel:    { label:'Mittel',    mult:1,   col:'#ffd200' },
-  schwierig: { label:'Schwierig', mult:2,   col:'#ff3344' },
-};
+// ─── Upgrades ───────────────────────────────────────────────────
+const UPGRADES = [
+  { id:'both',  icon:'⇄', label:'Doppel-Feuer',        desc:'Schiesst gleichzeitig vorwärts UND rückwärts' },
+  { id:'right', icon:'➡', label:'Seitenschuss rechts', desc:'Schiesst zusätzlich im 90°-Winkel nach rechts' },
+  { id:'left',  icon:'⬅', label:'Seitenschuss links',  desc:'Schiesst zusätzlich im 90°-Winkel nach links' },
+  { id:'heal',  icon:'💊', label:'Heiltrank',           desc:'Einmalig volles Leben — Doppelklick auf Zielen+Bewegen' },
+];
+let pendingUpgrades = [];
 
-function startGame(diffKey) {
-  const aiMax = Math.max(1, Math.round(10 * DIFFICULTIES[diffKey].mult));
-  buildMap();
-  player  = new Entity(1.5,  1.5,  'DU',   false, 0, 10);
-  aiList  = [
-    new Entity(13.5, 1.5,  'KI-1', true,  0, aiMax),
-    new Entity(1.5,  13.5, 'KI-2', true,  1, aiMax),
-    new Entity(13.5, 13.5, 'KI-3', true,  1, aiMax),
-  ];
-  projs=[]; gameState='playing';
-  joy.L.active=false; joy.R.active=false;
+function computeShootDirs(upgradeSet) {
+  const dirs = [0];
+  if (upgradeSet.has('right')) dirs.push(Math.PI/2);
+  if (upgradeSet.has('left'))  dirs.push(-Math.PI/2);
+  if (upgradeSet.has('both'))  dirs.push(Math.PI);
+  return dirs;
 }
 
-function showMenu() { gameState='menu'; }
+function getUpgradeButtons() {
+  const opts = pendingUpgrades;
+  const bw=Math.min(440, CW*0.8), bh=Math.max(56, CH*0.1), gap=bh*0.35;
+  const totalH = opts.length*bh + (opts.length-1)*gap;
+  const startY = CH/2 - totalH/2;
+  return opts.map((u,i) => ({ ...u, x:CW/2-bw/2, y:startY+i*(bh+gap), w:bw, h:bh }));
+}
+
+function drawUpgradeScreen() {
+  ctx.clearRect(0,0,CW,CH);
+  const bg=ctx.createLinearGradient(0,0,0,CH);
+  bg.addColorStop(0,'#101226'); bg.addColorStop(1,'#122418');
+  ctx.fillStyle=bg; ctx.fillRect(0,0,CW,CH);
+
+  ctx.textAlign='center';
+  ctx.fillStyle='#ffd200'; ctx.font=`bold ${Math.min(28,CW*0.042)}px monospace`;
+  ctx.fillText(`Level ${gameProgress.level} geschafft!`, CW/2, CH*0.14);
+  ctx.fillStyle='#ccc'; ctx.font=`${Math.min(16,CW*0.026)}px monospace`;
+  ctx.fillText('Wähle ein Upgrade', CW/2, CH*0.14 + Math.min(26,CW*0.04));
+
+  getUpgradeButtons().forEach(b => {
+    ctx.fillStyle='rgba(255,255,255,0.06)'; ctx.fillRect(b.x,b.y,b.w,b.h);
+    ctx.strokeStyle='#ffd200'; ctx.lineWidth=2; ctx.strokeRect(b.x,b.y,b.w,b.h);
+    ctx.textAlign='left';
+    ctx.fillStyle='#ffd200'; ctx.font=`bold ${Math.max(15,b.h*0.28)}px monospace`;
+    ctx.fillText(`${b.icon}  ${b.label}`, b.x+16, b.y+b.h*0.4);
+    ctx.fillStyle='#ccc'; ctx.font=`${Math.max(11,b.h*0.16)}px monospace`;
+    ctx.fillText(b.desc, b.x+16, b.y+b.h*0.72);
+  });
+  ctx.textAlign='center';
+}
+
+function handleUpgradeTap(px, py) {
+  for (const b of getUpgradeButtons()) {
+    if (px>=b.x && px<=b.x+b.w && py>=b.y && py<=b.y+b.h) { chooseUpgrade(b.id); return true; }
+  }
+  return false;
+}
+
+function chooseUpgrade(id) {
+  gameProgress.upgrades.add(id);
+  gameProgress.level += 1;
+  startLevel(gameProgress.level);
+}
+
+// ─── Heal combo (double "click" on aim+move) ───────────────────
+let comboLastPress = -Infinity, comboWasActive = false;
+
+function checkHealCombo(activeNow, ts) {
+  if (activeNow && !comboWasActive) {
+    if (ts - comboLastPress < 600) {
+      player.heal();
+      comboLastPress = -Infinity;
+    } else {
+      comboLastPress = ts;
+    }
+  }
+  comboWasActive = activeNow;
+}
+
+// ─── Game State ───────────────────────────────────────────────
+const LEVELS = 5;
+const AI_SPAWNS = [
+  {x:13.5,y:1.5}, {x:1.5,y:13.5}, {x:13.5,y:13.5}, {x:7.5,y:1.5}, {x:7.5,y:13.5}
+];
+let player, aiList, projs, gameState, lastT;
+let gameProgress = null;
+let resultType = null, resultStartTs = 0, resultReady = false;
+
+function startNewRun() {
+  gameProgress = { level: 1, upgrades: new Set(), healUsed: false };
+  startLevel(1);
+}
+
+function startLevel(level) {
+  buildMap();
+  player = new Entity(1.5, 1.5, 'DU', false, 0, 10);
+  player.shootDirs = computeShootDirs(gameProgress.upgrades);
+  player.healCharges = (gameProgress.upgrades.has('heal') && !gameProgress.healUsed) ? 1 : 0;
+  aiList = [];
+  for (let i=0; i<level; i++) {
+    const sp = AI_SPAWNS[i];
+    aiList.push(new Entity(sp.x, sp.y, 'KI-'+(i+1), true, 1, 10));
+  }
+  projs=[]; gameState='playing';
+  joy.L.active=false; joy.R.active=false;
+  comboLastPress=-Infinity; comboWasActive=false;
+}
+
+function startResult(type) {
+  gameState='result';
+  resultType=type;
+  resultStartTs=lastT;
+  resultReady=false;
+}
+
+function showMenu() { gameState = 'menu'; }
 
 function getMenuButtons() {
-  const bw=Math.min(320, CW*0.6), bh=Math.max(44, CH*0.08), gap=bh*0.4;
-  const totalH = bh*3+gap*2;
-  const startY = CH/2 - totalH/2 + bh*0.3;
-  return Object.keys(DIFFICULTIES).map((key,i) => ({
-    key, x:CW/2-bw/2, y:startY+i*(bh+gap), w:bw, h:bh, ...DIFFICULTIES[key]
-  }));
+  const bw=Math.min(320, CW*0.6), bh=Math.max(50, CH*0.09);
+  return [{ key:'start', x:CW/2-bw/2, y:CH*0.55, w:bw, h:bh, label:'Spiel starten', col:'#22cc44' }];
 }
 
 function drawMenu() {
@@ -636,9 +708,9 @@ function drawMenu() {
 
   ctx.textAlign='center';
   ctx.fillStyle='#fff'; ctx.font=`bold ${Math.min(38,CW*0.055)}px monospace`;
-  ctx.fillText('💦 Wasserpistolen Battle', CW/2, CH*0.24);
+  ctx.fillText('💦 Wasserpistolen Battle', CW/2, CH*0.28);
   ctx.fillStyle='#aaa'; ctx.font=`${Math.min(16,CW*0.03)}px monospace`;
-  ctx.fillText('Schwierigkeit wählen', CW/2, CH*0.24 + Math.min(30,CW*0.045));
+  ctx.fillText('5 Level — von 1 bis 5 KI-Gegnern', CW/2, CH*0.28 + Math.min(30,CW*0.045));
 
   getMenuButtons().forEach(b => {
     ctx.fillStyle='rgba(255,255,255,0.06)';
@@ -652,9 +724,136 @@ function drawMenu() {
 
 function handleMenuTap(px, py) {
   for (const b of getMenuButtons()) {
-    if (px>=b.x && px<=b.x+b.w && py>=b.y && py<=b.y+b.h) { startGame(b.key); return true; }
+    if (px>=b.x && px<=b.x+b.w && py>=b.y && py<=b.y+b.h) { startNewRun(); return true; }
   }
   return false;
+}
+
+// ─── Result scene (win/lose clip + loading bar) ────────────────
+function drawClipFigure(cx, cy, scale, mood) {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+
+  ctx.fillStyle='rgba(0,0,0,0.25)';
+  ctx.beginPath(); ctx.ellipse(0,62,26,8,0,0,Math.PI*2); ctx.fill();
+
+  const bodyCol = mood==='happy' ? '#ff6600' : '#3a5570';
+  ctx.fillStyle = mood==='happy' ? '#2255aa' : '#233042';
+  ctx.fillRect(-14,20,10,38);
+  ctx.fillRect(4,20,10,38);
+
+  ctx.fillStyle = bodyCol;
+  ctx.beginPath(); ctx.ellipse(0,-4,20,28,0,0,Math.PI*2); ctx.fill();
+
+  ctx.strokeStyle = bodyCol; ctx.lineWidth=9; ctx.lineCap='round';
+  if (mood==='happy') {
+    ctx.beginPath(); ctx.moveTo(-16,-10); ctx.lineTo(-34,-32); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(16,-10); ctx.lineTo(34,-32); ctx.stroke();
+  } else {
+    ctx.beginPath(); ctx.moveTo(-16,-10); ctx.lineTo(-30,20); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(16,-10); ctx.lineTo(30,20); ctx.stroke();
+  }
+
+  ctx.fillStyle='#f2c880';
+  ctx.beginPath(); ctx.arc(0,-34,16,0,Math.PI*2); ctx.fill();
+
+  ctx.fillStyle='#22cc44';
+  ctx.beginPath(); ctx.ellipse(0,-44,15,8,0,0,Math.PI*2); ctx.fill();
+
+  ctx.fillStyle='#222';
+  if (mood==='happy') {
+    ctx.beginPath(); ctx.arc(-6,-36,2,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(6,-36,2,0,Math.PI*2); ctx.fill();
+    ctx.lineWidth=2.5; ctx.strokeStyle='#222';
+    ctx.beginPath(); ctx.moveTo(-7,-25); ctx.quadraticCurveTo(0,-17,7,-25); ctx.stroke();
+  } else {
+    ctx.beginPath(); ctx.arc(-6,-37,2,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(6,-37,2,0,Math.PI*2); ctx.fill();
+    ctx.lineWidth=2.5; ctx.strokeStyle='#222';
+    ctx.beginPath(); ctx.moveTo(-7,-24); ctx.quadraticCurveTo(0,-30,7,-24); ctx.stroke();
+    // rain droplets on the sad figure
+    ctx.strokeStyle='rgba(180,210,255,0.8)'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(-10,-46); ctx.lineTo(-12,-40); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(9,-48); ctx.lineTo(7,-42); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawRain(t) {
+  ctx.strokeStyle='rgba(180,210,255,0.5)';
+  ctx.lineWidth=2;
+  for (let i=0;i<70;i++) {
+    const seed = i*97.13;
+    const x = (seed*13) % CW;
+    const speed = 500 + (i%5)*90;
+    const y = ((t*speed + seed*7) % (CH+40)) - 20;
+    ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x-6,y+18); ctx.stroke();
+  }
+}
+
+function drawSunburst(t) {
+  const sx = CW*0.5, sy = CH*0.2, r = Math.min(CW,CH)*0.09;
+  ctx.save();
+  ctx.translate(sx,sy);
+  ctx.rotate(t*0.25);
+  ctx.strokeStyle='rgba(255,220,120,0.85)'; ctx.lineWidth=4;
+  for (let i=0;i<12;i++) {
+    const a = i/12*Math.PI*2;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a)*r*1.3, Math.sin(a)*r*1.3);
+    ctx.lineTo(Math.cos(a)*r*1.9, Math.sin(a)*r*1.9);
+    ctx.stroke();
+  }
+  ctx.restore();
+  ctx.fillStyle='#ffd84d';
+  ctx.beginPath(); ctx.arc(sx,sy,r,0,Math.PI*2); ctx.fill();
+}
+
+function drawResultScene(type, t) {
+  const won = type==='won';
+  const bg=ctx.createLinearGradient(0,0,0,CH);
+  if (won) { bg.addColorStop(0,'#2a6fb0'); bg.addColorStop(1,'#ffdf8a'); }
+  else     { bg.addColorStop(0,'#1a2230'); bg.addColorStop(1,'#333d4a'); }
+  ctx.fillStyle=bg; ctx.fillRect(0,0,CW,CH);
+
+  if (won) {
+    drawSunburst(t);
+  } else {
+    ctx.fillStyle='rgba(60,70,85,0.8)';
+    [[0.2,0.15,1],[0.55,0.1,1.3],[0.8,0.18,0.9]].forEach(([fx,fy,sc])=>{
+      ctx.beginPath(); ctx.ellipse(CW*fx, CH*fy, 70*sc, 26*sc, 0,0,Math.PI*2); ctx.fill();
+    });
+    drawRain(t);
+  }
+
+  const figScale = Math.min(CW,CH)*0.0038;
+  drawClipFigure(CW/2, CH*0.6, figScale, won?'happy':'sad');
+
+  if (!won) {
+    ctx.fillStyle='rgba(40,70,100,0.5)';
+    ctx.beginPath(); ctx.ellipse(CW/2, CH*0.6+70*figScale, 90*figScale, 18*figScale, 0,0,Math.PI*2); ctx.fill();
+  }
+
+  ctx.textAlign='center';
+  ctx.fillStyle = won?'#123':'#dfe6ee';
+  const fs2=Math.min(46, CW*0.06);
+  ctx.font=`bold ${fs2}px monospace`;
+  ctx.fillText(won?'🏆 Alle 5 Level geschafft!':'💧 Verloren!', CW/2, CH*0.13);
+  ctx.font=`${fs2*0.45}px monospace`;
+  ctx.fillText(won?'Mitspieler geniesst die Sonne':'Mitspieler steht im Regen', CW/2, CH*0.13+fs2*0.6);
+}
+
+function drawLoadingBar(frac, ready) {
+  const bw=Math.min(360,CW*0.6), bh=18;
+  const bx=CW/2-bw/2, by=CH*0.85;
+  ctx.fillStyle='rgba(0,0,0,0.4)'; ctx.fillRect(bx-4,by-4,bw+8,bh+8);
+  ctx.fillStyle='#111'; ctx.fillRect(bx,by,bw,bh);
+  ctx.fillStyle= ready ? '#22cc44' : '#0af';
+  ctx.fillRect(bx,by,bw*frac,bh);
+  ctx.strokeStyle='#666'; ctx.lineWidth=1; ctx.strokeRect(bx,by,bw,bh);
+  ctx.fillStyle='#fff'; ctx.font=`bold ${Math.max(11,bh*0.7)}px monospace`; ctx.textAlign='center';
+  ctx.fillText(ready ? 'Tippen für ein neues Spiel' : 'Nächstes Spiel lädt…', CW/2, by+bh+22);
 }
 
 // ─── Main Loop ────────────────────────────────────────────────
@@ -670,54 +869,84 @@ function loop(ts) {
     return;
   }
 
-  if (gameState==='playing') {
-    // ── Aim ──────────────────────────────────────────────────
-    const rd=joyDelta(joy.R);
-    if (rd.len > 12) {
-      player.angle=Math.atan2(rd.dy, rd.dx);
-    } else {
-      const wm=fromSc(mouse.x,mouse.y);
-      player.angle=Math.atan2(wm.y-player.y, wm.x-player.x);
-    }
+  if (gameState==='upgrade') {
+    drawUpgradeScreen();
+    requestAnimationFrame(loop);
+    return;
+  }
 
-    // ── Move (joystick) ──────────────────────────────────────
-    const ld=joyDelta(joy.L);
-    if (ld.len > 12) {
-      player.tryMove(ld.dx/ld.len, ld.dy/ld.len, dt);
-    }
+  if (gameState==='result') {
+    const elapsed = (ts - resultStartTs)/1000;
+    drawResultScene(resultType, elapsed);
+    const frac = Math.min(1, elapsed/3);
+    resultReady = elapsed >= 3;
+    drawLoadingBar(frac, resultReady);
+    requestAnimationFrame(loop);
+    return;
+  }
 
-    // ── Move (keyboard) ──────────────────────────────────────
-    let kdx=0, kdy=0;
-    if (keys['d']||keys['arrowright']) kdx+=1;
-    if (keys['a']||keys['arrowleft'])  kdx-=1;
-    if (keys['s']||keys['arrowdown'])  kdy+=1;
-    if (keys['w']||keys['arrowup'])    kdy-=1;
-    if (kdx||kdy) { const l=Math.hypot(kdx,kdy); player.tryMove(kdx/l,kdy/l,dt); }
+  // ── gameState === 'playing' ─────────────────────────────────
+  // Aim
+  const rd=joyDelta(joy.R);
+  if (rd.len > 12) {
+    player.angle=Math.atan2(rd.dy, rd.dx);
+  } else {
+    const wm=fromSc(mouse.x,mouse.y);
+    player.angle=Math.atan2(wm.y-player.y, wm.x-player.x);
+  }
 
-    // ── Shoot (right joystick auto) ──────────────────────────
-    if (rd.len > JOY_R*0.35) { const p=player.shoot(); if(p) projs.push(p); }
+  // Move (joystick)
+  const ld=joyDelta(joy.L);
+  if (ld.len > 12) {
+    player.tryMove(ld.dx/ld.len, ld.dy/ld.len, dt);
+  }
 
-    player.update(dt);
+  // Move (keyboard)
+  let kdx=0, kdy=0;
+  if (keys['d']||keys['arrowright']) kdx+=1;
+  if (keys['a']||keys['arrowleft'])  kdx-=1;
+  if (keys['s']||keys['arrowdown'])  kdy+=1;
+  if (keys['w']||keys['arrowup'])    kdy-=1;
+  if (kdx||kdy) { const l=Math.hypot(kdx,kdy); player.tryMove(kdx/l,kdy/l,dt); }
 
-    const all=[player,...aiList];
-    for (const ai of aiList) { const p=ai.updateAI(dt,all); if(p) projs.push(p); ai.update(dt); }
+  // Heal activation: double "click" on aim+move (both joysticks, or move+aim/shoot on keyboard)
+  const touchBoth = joy.L.active && joy.R.active;
+  const kbMoving = !!(kdx||kdy) || ld.len>12;
+  const kbAiming = rd.len>12 || keys[' '] || keys['enter'];
+  checkHealCombo(touchBoth || (kbMoving && kbAiming), ts);
 
-    for (const p of projs) {
-      p.update(dt); if (!p.alive) continue;
-      for (const ent of all) {
-        if (ent===p.owner||!ent.alive||ent.team===p.owner.team) continue;
-        if (Math.hypot(ent.x-p.x,ent.y-p.y)<0.45) {
-          ent.takeDmg(p.dmg);
-          if (!ent.alive) p.owner.lives = p.owner.maxLives;
-          p.alive=false; break;
-        }
+  // Shoot (right joystick auto)
+  if (rd.len > JOY_R*0.35) { const p=player.shoot(); if(p) projs.push(...p); }
+
+  player.update(dt);
+
+  const all=[player,...aiList];
+  for (const ai of aiList) { const p=ai.updateAI(dt,all); if(p) projs.push(...p); ai.update(dt); }
+
+  for (const p of projs) {
+    p.update(dt); if (!p.alive) continue;
+    for (const ent of all) {
+      if (ent===p.owner||!ent.alive||ent.team===p.owner.team) continue;
+      if (Math.hypot(ent.x-p.x,ent.y-p.y)<0.45) {
+        ent.takeDmg(1);
+        if (!ent.alive) p.owner.lives = p.owner.maxLives;
+        p.alive=false; break;
       }
     }
-    projs=projs.filter(p=>p.alive);
+  }
+  projs=projs.filter(p=>p.alive);
 
-    const t0Dead=[player,...aiList].filter(e=>e.team===0).every(e=>!e.alive);
-    const t1Dead=[player,...aiList].filter(e=>e.team===1).every(e=>!e.alive);
-    if (t1Dead) gameState='won'; else if (t0Dead) gameState='lost';
+  const t0Dead=!player.alive;
+  const t1Dead=aiList.every(e=>!e.alive);
+  if (t1Dead) {
+    if (gameProgress.level >= LEVELS) {
+      startResult('won');
+    } else {
+      pendingUpgrades = UPGRADES.filter(u=>!gameProgress.upgrades.has(u.id));
+      gameState='upgrade';
+    }
+  } else if (t0Dead) {
+    startResult('lost');
   }
 
   // ── Render ───────────────────────────────────────────────────
@@ -736,31 +965,22 @@ function loop(ts) {
   drawJoysticks();
   drawHUD();
 
-  // Game over
-  if (gameState!=='playing') {
-    ctx.fillStyle='rgba(0,0,0,0.65)'; ctx.fillRect(0,0,CW,CH);
-    ctx.textAlign='center';
-    const won=gameState==='won';
-    ctx.fillStyle=won?'#22cc44':'#ff6600';
-    const fs2=Math.min(52, CW*0.06);
-    ctx.font=`bold ${fs2}px monospace`;
-    ctx.fillText(won?'🏆 Team Mattis gewinnt!':'🏆 Team KI gewinnt!',CW/2,CH/2-fs2*0.4);
-    ctx.fillStyle='#999'; ctx.font=`${fs2*0.45}px monospace`;
-    ctx.fillText('Tippen / R für Schwierigkeitsauswahl',CW/2,CH/2+fs2*0.8);
-  }
-
   requestAnimationFrame(loop);
 }
 
-// Tap on menu buttons / tap to return to menu after game over
+// Tap on menu / upgrade buttons, tap to start new game after result screen
 cv.addEventListener('touchend', e => {
   if (gameState==='menu') {
     e.preventDefault();
     const r=cv.getBoundingClientRect();
     for (const t of e.changedTouches) handleMenuTap(t.clientX-r.left, t.clientY-r.top);
-  } else if (gameState!=='playing') {
+  } else if (gameState==='upgrade') {
     e.preventDefault();
-    showMenu();
+    const r=cv.getBoundingClientRect();
+    for (const t of e.changedTouches) handleUpgradeTap(t.clientX-r.left, t.clientY-r.top);
+  } else if (gameState==='result') {
+    e.preventDefault();
+    if (resultReady) startNewRun();
   }
 },{passive:false});
 
