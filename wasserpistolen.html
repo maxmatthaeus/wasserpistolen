@@ -45,9 +45,10 @@ function resize() {
 }
 resize();
 window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', () => setTimeout(resize, 300));
 
 // ─── Map ─────────────────────────────────────────────────────
-const FLOOR = 0, WALL = 1, WATER = 2, OUTLET = 3;
+const FLOOR = 0, WALL = 1, WATER = 2, OUTLET = 3, UPGRADE = 4;
 let map = [];
 
 function buildMap() {
@@ -63,6 +64,7 @@ function buildMap() {
   [[2,2],[13,2],[2,13],[13,13]].forEach(([x,y]) => map[y][x] = WATER);
   map[6][4] = OUTLET;
   map[9][11] = OUTLET;
+  map[8][8] = UPGRADE;
 }
 
 function toSc(wx, wy) {
@@ -79,9 +81,9 @@ function walkable(wx, wy) {
 
 // ─── Projectile ───────────────────────────────────────────────
 class Proj {
-  constructor(x, y, angle, owner) {
+  constructor(x, y, angle, owner, dmg=1) {
     this.x = x; this.y = y;
-    this.angle = angle; this.owner = owner;
+    this.angle = angle; this.owner = owner; this.dmg = dmg;
     this.speed = 9; this.alive = true; this.trail = [];
   }
   update(dt) {
@@ -99,9 +101,10 @@ class Proj {
       ctx.beginPath(); ctx.arc(ts.x, ts.y, TS*0.04, 0, Math.PI*2); ctx.fill();
     }
     const s = toSc(this.x, this.y);
-    ctx.shadowColor = '#0ef'; ctx.shadowBlur = 8;
-    ctx.fillStyle = '#0ef';
-    ctx.beginPath(); ctx.arc(s.x, s.y, TS*0.075, 0, Math.PI*2); ctx.fill();
+    const col = this.dmg > 1 ? '#e0e' : '#0ef';
+    ctx.shadowColor = col; ctx.shadowBlur = 8;
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(s.x, s.y, TS*(this.dmg>1?0.1:0.075), 0, Math.PI*2); ctx.fill();
     ctx.shadowBlur = 0;
   }
 }
@@ -119,6 +122,7 @@ class Entity {
     this.aiState = 'patrol'; this.aiTarget = null; this.aiTimer = 0;
     this.wanderPt = {x, y};
     this.shootDirs = [0]; this.healCharges = 0; this.healFlash = 0;
+    this.doubleShot = false; this.upgradeTimer = 0;
     this.path = []; this.pathGoal = null; this.pathTimer = 0;
   }
   get alive() { return this.lives > 0; }
@@ -141,7 +145,8 @@ class Entity {
   shoot() {
     if (this.water<=0||this.charge<=0||this.state!=='normal'||this.shootCd>0) return null;
     this.water--; this.charge--; this.shootCd = 0.28;
-    return this.shootDirs.map(off => new Proj(this.x, this.y, this.angle+off, this));
+    const dmg = this.doubleShot ? 2 : 1;
+    return this.shootDirs.map(off => new Proj(this.x, this.y, this.angle+off, this, dmg));
   }
   heal() {
     if (this.healCharges<=0 || !this.alive) return false;
@@ -168,6 +173,10 @@ class Entity {
     }
     return null;
   }
+  onUpgradeTile() {
+    const gx = Math.floor(this.x), gy = Math.floor(this.y);
+    return gx>=0&&gy>=0&&gx<G&&gy<G&&map[gy][gx]===UPGRADE;
+  }
   update(dt) {
     if (this.shootCd > 0) this.shootCd -= dt;
     if (this.hitFlash > 0) this.hitFlash -= dt;
@@ -180,6 +189,14 @@ class Entity {
       const st = this.nearStation();
       if (this.water < 10 && st === WATER) this.water = 10;
       if (this.charge < 10 && st === OUTLET) { this.state='charging'; this.chargeTimer=3; this.invul=true; }
+    }
+    if (!this.doubleShot && this.alive) {
+      if (this.state === 'normal' && this.onUpgradeTile()) {
+        this.upgradeTimer += dt;
+        if (this.upgradeTimer >= 2) this.doubleShot = true;
+      } else {
+        this.upgradeTimer = 0;
+      }
     }
   }
   updateAI(dt, all) {
@@ -290,6 +307,13 @@ class Entity {
       ctx.beginPath(); ctx.ellipse(0,0,rw*4.2,rh*3,0,0,Math.PI*2); ctx.stroke();
     }
 
+    // Double-damage charge-up ring
+    if (this.upgradeTimer > 0 && !this.doubleShot) {
+      const frac = Math.min(1, this.upgradeTimer/2);
+      ctx.strokeStyle='#ffd200'; ctx.lineWidth=3*sc; ctx.lineCap='round';
+      ctx.beginPath(); ctx.arc(0,0,rw*3.2,-Math.PI/2,-Math.PI/2+frac*Math.PI*2); ctx.stroke();
+    }
+
     // Head
     ctx.fillStyle=skin;
     ctx.beginPath(); ctx.ellipse(0,-rh*2.1+wob*0.3,rw*1.4,rh,0,0,Math.PI*2); ctx.fill();
@@ -317,6 +341,12 @@ class Entity {
     // Gun(s) — one per active shoot direction
     for (const off of this.shootDirs) {
       drawGun(ctx, armTx+gdx*0.5, armTy+gdy*0.5-rh*0.2, this.angle+off, flash, sc);
+    }
+
+    // Double-damage badge
+    if (this.doubleShot && !flash) {
+      ctx.fillStyle='#e0e'; ctx.font=`bold ${Math.max(8,9*sc)}px monospace`; ctx.textAlign='center';
+      ctx.fillText('2×', rw*1.8, -rh*3.2);
     }
 
     // Name
@@ -429,6 +459,15 @@ function drawTile(gx, gy) {
     ctx.beginPath(); ctx.arc(cx+TS*0.08,cy,TS*0.045,0,Math.PI*2); ctx.fill();
     ctx.fillStyle='#ffe000'; ctx.font=`${Math.max(8,TS*0.4)}px serif`; ctx.textAlign='center';
     ctx.fillText('⚡',cx,cy+TS*0.35);
+  } else if (type===UPGRADE) {
+    ctx.fillStyle='#2a3a2a'; ctx.fillRect(s.x,s.y,TS,TS);
+    const pulse=(Math.sin(Date.now()*0.004)+1)/2;
+    ctx.strokeStyle=`rgba(255,210,0,${0.5+pulse*0.4})`; ctx.lineWidth=Math.max(2,TS*0.05);
+    ctx.beginPath(); ctx.arc(cx,cy,TS*0.4,0,Math.PI*2); ctx.stroke();
+    ctx.fillStyle='rgba(255,210,0,0.15)';
+    ctx.beginPath(); ctx.arc(cx,cy,TS*0.4,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#ffd200'; ctx.font=`bold ${Math.max(9,TS*0.32)}px monospace`; ctx.textAlign='center';
+    ctx.fillText('2×',cx,cy+TS*0.11);
   }
 }
 
@@ -685,9 +724,9 @@ function drawHealButton() {
 
 // ─── Upgrades ───────────────────────────────────────────────────
 const UPGRADES = [
-  { id:'both',  icon:'⇄', label:'Doppel-Feuer',        desc:'Schiesst gleichzeitig vorwärts UND rückwärts' },
-  { id:'right', icon:'➡', label:'Seitenschuss rechts', desc:'Schiesst zusätzlich im 90°-Winkel nach rechts' },
-  { id:'left',  icon:'⬅', label:'Seitenschuss links',  desc:'Schiesst zusätzlich im 90°-Winkel nach links' },
+  { id:'both',  icon:'↔', label:'Doppel-Feuer',        desc:'Schiesst gleichzeitig vorwärts UND rückwärts' },
+  { id:'right', icon:'→', label:'Seitenschuss rechts', desc:'Schiesst zusätzlich im 90°-Winkel nach rechts' },
+  { id:'left',  icon:'←', label:'Seitenschuss links',  desc:'Schiesst zusätzlich im 90°-Winkel nach links' },
   { id:'heal',  icon:'🧴', label:'Sonnencreme',         desc:'Einmalig volles Leben — Knopf zwischen den Joysticks' },
 ];
 let pendingUpgrades = [];
@@ -767,7 +806,7 @@ function startLevel(level) {
   aiList = [];
   for (let i=0; i<level; i++) {
     const sp = AI_SPAWNS[i];
-    aiList.push(new Entity(sp.x, sp.y, 'KI-'+(i+1), true, 1, 5));
+    aiList.push(new Entity(sp.x, sp.y, 'KI-'+(i+1), true, 1, 4));
   }
   projs=[]; gameState='playing';
   joy.L.active=false; joy.R.active=false;
@@ -1009,7 +1048,7 @@ function loop(ts) {
     for (const ent of all) {
       if (ent===p.owner||!ent.alive||ent.team===p.owner.team) continue;
       if (Math.hypot(ent.x-p.x,ent.y-p.y)<0.45) {
-        ent.takeDmg(1);
+        ent.takeDmg(p.dmg);
         if (!ent.alive) p.owner.lives = p.owner.maxLives;
         p.alive=false; break;
       }
