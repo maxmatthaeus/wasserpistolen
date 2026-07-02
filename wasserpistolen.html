@@ -64,6 +64,19 @@ function hitTest(buttons, px, py) {
   return buttons.find(b => px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h) || null;
 }
 
+// Vollflächiger vertikaler Verlauf als Bildschirmhintergrund.
+function drawBgGradient(colTop, colBottom) {
+  const bg = ctx.createLinearGradient(0, 0, 0, CH);
+  bg.addColorStop(0, colTop); bg.addColorStop(1, colBottom);
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, CW, CH);
+}
+
+// Rechteckiges Button-Panel (Fläche + Rahmen), Beschriftung übernimmt der Aufrufer.
+function drawButtonPanel(b, borderCol) {
+  ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fillRect(b.x, b.y, b.w, b.h);
+  ctx.strokeStyle = borderCol; ctx.lineWidth = 2; ctx.strokeRect(b.x, b.y, b.w, b.h);
+}
+
 const G = 16;
 let CW, CH, TS, OX, OY, HUD_H, JOY_R, JOY_MAX, JOY_LX, JOY_LY, JOY_RX, JOY_RY;
 let HEAL_BTN_X, HEAL_BTN_Y, HEAL_BTN_R;
@@ -582,12 +595,19 @@ document.addEventListener('keydown', e => {
   e.preventDefault();
 });
 document.addEventListener('keyup', e => { keys[e.key.toLowerCase()]=false; });
+// Tap-Routing für die nicht-spielenden Bildschirme (Menü/Upgrade/Ergebnis),
+// gemeinsam genutzt von Maus-Click und Touch-End.
+function handleOverlayTap(px, py) {
+  if (gameState==='menu')    { handleMenuTap(px,py); return true; }
+  if (gameState==='upgrade') { handleUpgradeTap(px,py); return true; }
+  if (gameState==='result')  { if (resultReady) startNewRun(); return true; }
+  return false;
+}
+
 cv.addEventListener('click', e => {
   const r=cv.getBoundingClientRect(); const px=e.clientX-r.left, py=e.clientY-r.top;
-  if (gameState==='menu') { handleMenuTap(px,py); return; }
-  if (gameState==='upgrade') { handleUpgradeTap(px,py); return; }
-  if (gameState==='result') { if (resultReady) startNewRun(); return; }
-  if (gameState!=='playing') { return; }
+  if (handleOverlayTap(px,py)) return;
+  if (gameState!=='playing') return;
   if (tryHealButtonTap(px,py)) return;
   const p=player.shoot(); if(p) projs.push(...p);
 });
@@ -791,10 +811,7 @@ function getUpgradeButtons() {
 }
 
 function drawUpgradeScreen() {
-  ctx.clearRect(0,0,CW,CH);
-  const bg=ctx.createLinearGradient(0,0,0,CH);
-  bg.addColorStop(0,'#101226'); bg.addColorStop(1,'#122418');
-  ctx.fillStyle=bg; ctx.fillRect(0,0,CW,CH);
+  drawBgGradient('#101226', '#122418');
 
   ctx.textAlign='center';
   ctx.fillStyle='#ffd200'; ctx.font=`bold ${Math.min(28,CW*0.042)}px monospace`;
@@ -803,8 +820,7 @@ function drawUpgradeScreen() {
   ctx.fillText('Wähle ein Upgrade', CW/2, CH*0.14 + Math.min(26,CW*0.04));
 
   getUpgradeButtons().forEach(b => {
-    ctx.fillStyle='rgba(255,255,255,0.06)'; ctx.fillRect(b.x,b.y,b.w,b.h);
-    ctx.strokeStyle='#ffd200'; ctx.lineWidth=2; ctx.strokeRect(b.x,b.y,b.w,b.h);
+    drawButtonPanel(b, '#ffd200');
     ctx.textAlign='left';
     ctx.fillStyle='#ffd200'; ctx.font=`bold ${Math.max(15,b.h*0.28)}px monospace`;
     ctx.fillText(`${b.icon}  ${b.label}`, b.x+16, b.y+b.h*0.4);
@@ -879,10 +895,7 @@ function drawMenuGunArt(cx, cy, scale) {
 }
 
 function drawMenu() {
-  ctx.clearRect(0,0,CW,CH);
-  const bg=ctx.createLinearGradient(0,0,0,CH);
-  bg.addColorStop(0,'#080818'); bg.addColorStop(1,'#101c12');
-  ctx.fillStyle=bg; ctx.fillRect(0,0,CW,CH);
+  drawBgGradient('#080818', '#101c12');
 
   ctx.textAlign='center';
   ctx.fillStyle='#fff'; ctx.font=`bold ${Math.min(38,CW*0.055)}px monospace`;
@@ -893,10 +906,7 @@ function drawMenu() {
   drawMenuGunArt(CW/2, CH*0.44, Math.min(CW,CH)*0.014);
 
   getMenuButtons().forEach(b => {
-    ctx.fillStyle='rgba(255,255,255,0.06)';
-    ctx.fillRect(b.x,b.y,b.w,b.h);
-    ctx.strokeStyle=b.col; ctx.lineWidth=2;
-    ctx.strokeRect(b.x,b.y,b.w,b.h);
+    drawButtonPanel(b, b.col);
     ctx.fillStyle=b.col; ctx.font=`bold ${Math.max(14,b.h*0.35)}px monospace`;
     ctx.fillText(b.label, b.x+b.w/2, b.y+b.h/2+b.h*0.13);
   });
@@ -1015,10 +1025,8 @@ function drawStars(cx, cy, filled, total, r) {
 
 function drawResultScene(type, t) {
   const won = type==='won';
-  const bg=ctx.createLinearGradient(0,0,0,CH);
-  if (won) { bg.addColorStop(0,'#2a6fb0'); bg.addColorStop(1,'#ffdf8a'); }
-  else     { bg.addColorStop(0,'#1a2230'); bg.addColorStop(1,'#333d4a'); }
-  ctx.fillStyle=bg; ctx.fillRect(0,0,CW,CH);
+  if (won) drawBgGradient('#2a6fb0', '#ffdf8a');
+  else     drawBgGradient('#1a2230', '#333d4a');
 
   if (won) {
     drawSunburst(t);
@@ -1153,15 +1161,12 @@ function loop(ts) {
   }
 
   // ── Render ───────────────────────────────────────────────────
-  ctx.clearRect(0,0,CW,CH);
-  const bg=ctx.createLinearGradient(0,0,0,CH);
-  bg.addColorStop(0,'#080818'); bg.addColorStop(1,'#101c12');
-  ctx.fillStyle=bg; ctx.fillRect(0,0,CW,CH);
+  drawBgGradient('#080818', '#101c12');
 
   for (let y=0;y<G;y++) for (let x=0;x<G;x++) drawTile(x,y);
 
   const rq=[];
-  for (const e of [player,...aiList]) if(e.alive) rq.push({d:e.y,fn:()=>e.draw()});
+  for (const e of all) if(e.alive) rq.push({d:e.y,fn:()=>e.draw()});
   for (const p of projs) rq.push({d:p.y,fn:()=>p.draw()});
   rq.sort((a,b)=>a.d-b.d); rq.forEach(i=>i.fn());
 
@@ -1174,18 +1179,10 @@ function loop(ts) {
 
 // Tap on menu / upgrade buttons, tap to start new game after result screen
 cv.addEventListener('touchend', e => {
-  if (gameState==='menu') {
-    e.preventDefault();
-    const r=cv.getBoundingClientRect();
-    for (const t of e.changedTouches) handleMenuTap(t.clientX-r.left, t.clientY-r.top);
-  } else if (gameState==='upgrade') {
-    e.preventDefault();
-    const r=cv.getBoundingClientRect();
-    for (const t of e.changedTouches) handleUpgradeTap(t.clientX-r.left, t.clientY-r.top);
-  } else if (gameState==='result') {
-    e.preventDefault();
-    if (resultReady) startNewRun();
-  }
+  if (gameState==='playing') return; // Joystick-Release wird vom Listener oben behandelt
+  e.preventDefault();
+  const r=cv.getBoundingClientRect();
+  for (const t of e.changedTouches) handleOverlayTap(t.clientX-r.left, t.clientY-r.top);
 },{passive:false});
 
 showMenu();
