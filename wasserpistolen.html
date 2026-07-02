@@ -23,6 +23,47 @@ canvas { display: block; touch-action: none; }
 const cv = document.getElementById('c');
 const ctx = cv.getContext('2d');
 
+// ─── Config & Helpers ────────────────────────────────────────
+// Gameplay-Tuning an einem Ort gebündelt.
+const CONFIG = {
+  levels:      5,     // Anzahl Level (Level N = N KI-Gegner)
+  playerLives: 12,
+  aiLives:     2,
+  waterMax:    10,
+  chargeMax:   20,
+  chargeLow:   10,    // Nachlade-/Auffüll-Schwelle
+  playerSpeed: 3.8,
+  aiSpeed:     2.8,
+  shootCd:     0.28,  // Sekunden zwischen zwei Schüssen
+  chargeTime:  3,     // Sekunden Aufladen an der Steckdose (unverwundbar)
+  doubleHold:  2,     // Sekunden auf dem Upgrade-Feld für Doppelschaden
+  resultPause: 3,     // Sekunden Pause vor einem neuen Spiel
+};
+
+const COL = {
+  teamPlayer: '#22cc44',
+  teamAI:     '#ff6600',
+  dead:       '#444',
+  skin:       '#f2c880',
+};
+
+const teamColor = team => team === 0 ? COL.teamPlayer : COL.teamAI;
+
+// Lebensbalken-Farbe: grün (voll) → violett (fast tot), grau (tot).
+function lifeColor(lives, maxLives, alive = true) {
+  if (!alive) return COL.dead;
+  const t = 1 - (lives - 1) / Math.max(1, maxLives - 1);
+  return `rgb(${Math.round(220*(1-t))},15,${Math.round(220*t)})`;
+}
+
+// Sanftes Pulsieren zwischen 0 und 1 für Animationen.
+const pulse = (speed = 0.006) => (Math.sin(Date.now() * speed) + 1) / 2;
+
+// Erstes Button-Rechteck, das den Punkt (px,py) enthält, oder null.
+function hitTest(buttons, px, py) {
+  return buttons.find(b => px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h) || null;
+}
+
 const G = 16;
 let CW, CH, TS, OX, OY, HUD_H, JOY_R, JOY_MAX, JOY_LX, JOY_LY, JOY_RX, JOY_RY;
 let HEAL_BTN_X, HEAL_BTN_Y, HEAL_BTN_R;
@@ -127,8 +168,8 @@ class Entity {
     this.x = x; this.y = y;
     this.name = name; this.isAI = isAI; this.team = team;
     this.maxLives = maxLives;
-    this.lives = maxLives; this.water = 10; this.charge = 20;
-    this.angle = 0; this.speed = isAI ? 2.8 : 3.8;
+    this.lives = maxLives; this.water = CONFIG.waterMax; this.charge = CONFIG.chargeMax;
+    this.angle = 0; this.speed = isAI ? CONFIG.aiSpeed : CONFIG.playerSpeed;
     this.state = 'normal'; this.chargeTimer = 0; this.invul = false;
     this.shootCd = 0; this.hitFlash = 0; this.walkCycle = 0;
     this.aiState = 'patrol'; this.aiTarget = null; this.aiTimer = 0;
@@ -138,11 +179,7 @@ class Entity {
     this.path = []; this.pathGoal = null; this.pathTimer = 0;
   }
   get alive() { return this.lives > 0; }
-  bodyColor() {
-    if (!this.alive) return '#444';
-    const t = 1 - (this.lives - 1) / Math.max(1, this.maxLives - 1);
-    return `rgb(${Math.round(220*(1-t))},15,${Math.round(220*t)})`;
-  }
+  bodyColor() { return lifeColor(this.lives, this.maxLives, this.alive); }
   tryMove(dx, dy, dt) {
     if (this.state !== 'normal') return;
     const r = 0.32;
@@ -156,7 +193,7 @@ class Entity {
   }
   shoot() {
     if (this.water<=0||this.charge<=0||this.state!=='normal'||this.shootCd>0) return null;
-    this.water--; this.charge--; this.shootCd = 0.28;
+    this.water--; this.charge--; this.shootCd = CONFIG.shootCd;
     const dmg = this.doubleShot ? 2 : 1;
     return this.shootDirs.map(off => new Proj(this.x, this.y, this.angle+off, this, dmg));
   }
@@ -195,17 +232,17 @@ class Entity {
     if (this.healFlash > 0) this.healFlash -= dt;
     if (this.state === 'charging') {
       this.chargeTimer -= dt;
-      if (this.chargeTimer <= 0) { this.charge = 20; this.state = 'normal'; this.invul = false; }
+      if (this.chargeTimer <= 0) { this.charge = CONFIG.chargeMax; this.state = 'normal'; this.invul = false; }
     }
     if (this.state === 'normal') {
       const st = this.nearStation();
-      if (this.water < 10 && st === WATER) this.water = 10;
-      if (this.charge < 10 && st === OUTLET) { this.state='charging'; this.chargeTimer=3; this.invul=true; }
+      if (this.water < CONFIG.waterMax && st === WATER) this.water = CONFIG.waterMax;
+      if (this.charge < CONFIG.chargeLow && st === OUTLET) { this.state='charging'; this.chargeTimer=CONFIG.chargeTime; this.invul=true; }
     }
     if (!this.doubleShot && this.alive) {
       if (this.state === 'normal' && this.onUpgradeTile()) {
         this.upgradeTimer += dt;
-        if (this.upgradeTimer >= 2) this.doubleShot = true;
+        if (this.upgradeTimer >= CONFIG.doubleHold) this.doubleShot = true;
       } else {
         this.upgradeTimer = 0;
       }
@@ -276,7 +313,7 @@ class Entity {
     const flash = this.hitFlash > 0;
     const heal = this.healFlash > 0;
     const col = flash ? '#fff' : this.bodyColor();
-    const skin = flash ? '#fff' : '#f2c880';
+    const skin = flash ? '#fff' : COL.skin;
     const ca = Math.cos(this.angle), sa = Math.sin(this.angle);
     const gdx = ca*TS*0.4, gdy = sa*TS*0.4;
     const pdx = -sa*TS*0.2, pdy = ca*TS*0.2;
@@ -308,8 +345,7 @@ class Entity {
 
     // Invul shield
     if (this.invul) {
-      const pulse=(Math.sin(Date.now()*0.01)+1)/2;
-      ctx.strokeStyle=`rgba(255,255,0,${0.45+pulse*0.45})`; ctx.lineWidth=3*sc;
+      ctx.strokeStyle=`rgba(255,255,0,${0.45+pulse(0.01)*0.45})`; ctx.lineWidth=3*sc;
       ctx.beginPath(); ctx.ellipse(0,0,rw*3.8,rh*2.6,0,0,Math.PI*2); ctx.stroke();
     }
 
@@ -321,7 +357,7 @@ class Entity {
 
     // Double-damage charge-up ring
     if (this.upgradeTimer > 0 && !this.doubleShot) {
-      const frac = Math.min(1, this.upgradeTimer/2);
+      const frac = Math.min(1, this.upgradeTimer/CONFIG.doubleHold);
       ctx.strokeStyle='#ffd200'; ctx.lineWidth=3*sc; ctx.lineCap='round';
       ctx.beginPath(); ctx.arc(0,0,rw*3.2,-Math.PI/2,-Math.PI/2+frac*Math.PI*2); ctx.stroke();
     }
@@ -332,7 +368,7 @@ class Entity {
     ctx.strokeStyle='rgba(0,0,0,0.12)'; ctx.lineWidth=0.5; ctx.stroke();
 
     // Team-coloured hair/helmet
-    const teamCol = flash?'#fff':(this.team===0?'#22cc44':'#ff6600');
+    const teamCol = flash?'#fff':teamColor(this.team);
     ctx.fillStyle=teamCol;
     ctx.beginPath(); ctx.ellipse(0,-rh*2.9,rw*1.3,rh*0.55,0,0,Math.PI*2); ctx.fill();
 
@@ -362,8 +398,7 @@ class Entity {
     }
 
     // Name
-    const teamCol2=this.team===0?'#22cc44':'#ff6600';
-    ctx.fillStyle=flash?'rgba(255,255,255,0.8)':teamCol2;
+    ctx.fillStyle=flash?'rgba(255,255,255,0.8)':teamColor(this.team);
     ctx.font=`bold ${Math.max(8,10*sc)}px monospace`; ctx.textAlign='center';
     ctx.fillText(this.name, 0, -rh*5.5);
 
@@ -473,8 +508,7 @@ function drawTile(gx, gy) {
     ctx.fillText('⚡',cx,cy+TS*0.35);
   } else if (type===UPGRADE) {
     ctx.fillStyle='#2a3a2a'; ctx.fillRect(s.x,s.y,TS,TS);
-    const pulse=(Math.sin(Date.now()*0.004)+1)/2;
-    ctx.strokeStyle=`rgba(255,210,0,${0.5+pulse*0.4})`; ctx.lineWidth=Math.max(2,TS*0.05);
+    ctx.strokeStyle=`rgba(255,210,0,${0.5+pulse(0.004)*0.4})`; ctx.lineWidth=Math.max(2,TS*0.05);
     ctx.beginPath(); ctx.arc(cx,cy,TS*0.4,0,Math.PI*2); ctx.stroke();
     ctx.fillStyle='rgba(255,210,0,0.15)';
     ctx.beginPath(); ctx.arc(cx,cy,TS*0.4,0,Math.PI*2); ctx.fill();
@@ -576,12 +610,12 @@ function drawHUD() {
 
   // Player (left)
   ctx.textAlign='left'; ctx.font=`bold ${fs+1}px monospace`;
-  ctx.fillStyle='#22cc44';
+  ctx.fillStyle=COL.teamPlayer;
   ctx.fillText(`🟢 DU  ${player.alive?'♥'+player.lives:'☠'}`, 8, HUD_H*0.3);
   const bw0=Math.max(60, CW*0.16);
   miniBar(8, HUD_H*0.38, bw0, bh, player.alive?player.lives/player.maxLives:0, '#e0154e');
-  miniBar(8, HUD_H*0.38+bh+3, bw0, bh, player.water/10, '#0099ff');
-  miniBar(8, HUD_H*0.38+(bh+3)*2, bw0, bh, player.charge/20, '#ffdd00');
+  miniBar(8, HUD_H*0.38+bh+3, bw0, bh, player.water/CONFIG.waterMax, '#0099ff');
+  miniBar(8, HUD_H*0.38+(bh+3)*2, bw0, bh, player.charge/CONFIG.chargeMax, '#ffdd00');
 
   // Enemies (right) — compact row, scales with AI count
   const n = aiList.length;
@@ -589,13 +623,12 @@ function drawHUD() {
   const chipW = Math.max(28, Math.min(60, areaW/n - 6));
   const rowW = n*(chipW+6)-6;
   const rowX = CW-8-rowW;
-  ctx.textAlign='left'; ctx.fillStyle='#ff6600'; ctx.font=`bold ${fs+1}px monospace`;
+  ctx.textAlign='left'; ctx.fillStyle=COL.teamAI; ctx.font=`bold ${fs+1}px monospace`;
   ctx.fillText(`🟠 KI ${aiList.filter(e=>e.alive).length}/${n}`, rowX, HUD_H*0.3);
   aiList.forEach((e,i) => {
     const bx = rowX + i*(chipW+6);
-    const liveT = e.alive&&e.lives>1?1-(e.lives-1)/Math.max(1,e.maxLives-1):1;
-    const liveCol = e.alive?`rgb(${Math.round(220*(1-liveT))},15,${Math.round(220*liveT)})`:'#444';
-    ctx.textAlign='center'; ctx.fillStyle=e.alive?'#ff6600':'#444';
+    const liveCol = lifeColor(e.lives, e.maxLives, e.alive);
+    ctx.textAlign='center'; ctx.fillStyle=e.alive?COL.teamAI:COL.dead;
     ctx.font=`bold ${Math.max(8,fs*0.8)}px monospace`;
     ctx.fillText(e.alive?`♥${e.lives}`:'☠', bx+chipW/2, HUD_H*0.62);
     miniBar(bx, HUD_H*0.68, chipW, bh, e.alive?e.lives/e.maxLives:0, liveCol);
@@ -664,8 +697,7 @@ function drawHealButton() {
   ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.fill();
 
   if (!used) {
-    const pulse=(Math.sin(Date.now()*0.006)+1)/2;
-    ctx.strokeStyle=`rgba(255,210,0,${0.35+pulse*0.35})`; ctx.lineWidth=2.5;
+    ctx.strokeStyle=`rgba(255,210,0,${0.35+pulse()*0.35})`; ctx.lineWidth=2.5;
     ctx.beginPath(); ctx.arc(cx,cy,r*0.94,0,Math.PI*2); ctx.stroke();
   }
 
@@ -784,9 +816,8 @@ function drawUpgradeScreen() {
 }
 
 function handleUpgradeTap(px, py) {
-  for (const b of getUpgradeButtons()) {
-    if (px>=b.x && px<=b.x+b.w && py>=b.y && py<=b.y+b.h) { chooseUpgrade(b.id); return true; }
-  }
+  const b = hitTest(getUpgradeButtons(), px, py);
+  if (b) { chooseUpgrade(b.id); return true; }
   return false;
 }
 
@@ -797,7 +828,7 @@ function chooseUpgrade(id) {
 }
 
 // ─── Game State ───────────────────────────────────────────────
-const LEVELS = 5;
+const LEVELS = CONFIG.levels;
 const AI_SPAWNS = [
   {x:13.5,y:1.5}, {x:1.5,y:13.5}, {x:13.5,y:13.5}, {x:7.5,y:1.5}, {x:7.5,y:13.5}
 ];
@@ -812,13 +843,13 @@ function startNewRun() {
 
 function startLevel(level) {
   buildMap();
-  player = new Entity(1.5, 1.5, 'DU', false, 0, 12);
+  player = new Entity(1.5, 1.5, 'DU', false, 0, CONFIG.playerLives);
   player.shootDirs = computeShootDirs(gameProgress.upgrades);
   player.healCharges = (gameProgress.upgrades.has('heal') && !gameProgress.healUsed) ? 1 : 0;
   aiList = [];
   for (let i=0; i<level; i++) {
     const sp = AI_SPAWNS[i];
-    aiList.push(new Entity(sp.x, sp.y, 'KI-'+(i+1), true, 1, 2));
+    aiList.push(new Entity(sp.x, sp.y, 'KI-'+(i+1), true, 1, CONFIG.aiLives));
   }
   projs=[]; gameState='playing';
   joy.L.active=false; joy.R.active=false;
@@ -841,8 +872,7 @@ function getMenuButtons() {
 
 function drawMenuGunArt(cx, cy, scale) {
   ctx.fillStyle='#ffe000'; ctx.font=`${Math.max(12,scale*3)}px serif`; ctx.textAlign='center';
-  const pulse=(Math.sin(Date.now()*0.006)+1)/2;
-  ctx.globalAlpha = 0.6+pulse*0.4;
+  ctx.globalAlpha = 0.6+pulse()*0.4;
   ctx.fillText('⚡', cx-scale*10, cy-scale*7);
   ctx.fillText('⚡', cx+scale*13, cy-scale*4);
   ctx.globalAlpha = 1;
@@ -859,7 +889,7 @@ function drawMenu() {
   ctx.fillStyle='#fff'; ctx.font=`bold ${Math.min(38,CW*0.055)}px monospace`;
   ctx.fillText('💦 Wasserpistolen Battle', CW/2, CH*0.18);
   ctx.fillStyle='#aaa'; ctx.font=`${Math.min(16,CW*0.03)}px monospace`;
-  ctx.fillText('5 Level — von 1 bis 5 KI-Gegnern', CW/2, CH*0.18 + Math.min(30,CW*0.045));
+  ctx.fillText(`${LEVELS} Level — von 1 bis ${LEVELS} KI-Gegnern`, CW/2, CH*0.18 + Math.min(30,CW*0.045));
 
   drawMenuGunArt(CW/2, CH*0.44, Math.min(CW,CH)*0.014);
 
@@ -874,9 +904,7 @@ function drawMenu() {
 }
 
 function handleMenuTap(px, py) {
-  for (const b of getMenuButtons()) {
-    if (px>=b.x && px<=b.x+b.w && py>=b.y && py<=b.y+b.h) { startNewRun(); return true; }
-  }
+  if (hitTest(getMenuButtons(), px, py)) { startNewRun(); return true; }
   return false;
 }
 
@@ -1015,7 +1043,7 @@ function drawResultScene(type, t) {
   ctx.fillStyle = won?'#123':'#dfe6ee';
   const fs2=Math.min(46, CW*0.06);
   ctx.font=`bold ${fs2}px monospace`;
-  ctx.fillText(won?'🏆 Alle 5 Level geschafft!':'💧 Verloren!', CW/2, CH*0.13);
+  ctx.fillText(won?`🏆 Alle ${LEVELS} Level geschafft!`:'💧 Verloren!', CW/2, CH*0.13);
   ctx.font=`${fs2*0.45}px monospace`;
   ctx.fillText(won?'Mitspieler geniesst die Sonne':'Mitspieler steht im Regen', CW/2, CH*0.13+fs2*0.6);
 
@@ -1060,8 +1088,8 @@ function loop(ts) {
   if (gameState==='result') {
     const elapsed = (ts - resultStartTs)/1000;
     drawResultScene(resultType, elapsed);
-    const frac = Math.min(1, elapsed/3);
-    resultReady = elapsed >= 3;
+    const frac = Math.min(1, elapsed/CONFIG.resultPause);
+    resultReady = elapsed >= CONFIG.resultPause;
     drawLoadingBar(frac, resultReady);
     requestAnimationFrame(loop);
     return;
