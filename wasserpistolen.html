@@ -767,7 +767,7 @@ function startLevel(level) {
   aiList = [];
   for (let i=0; i<level; i++) {
     const sp = AI_SPAWNS[i];
-    aiList.push(new Entity(sp.x, sp.y, 'KI-'+(i+1), true, 1, 10));
+    aiList.push(new Entity(sp.x, sp.y, 'KI-'+(i+1), true, 1, 5));
   }
   projs=[]; gameState='playing';
   joy.L.active=false; joy.R.active=false;
