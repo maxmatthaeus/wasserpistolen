@@ -812,13 +812,13 @@ function startNewRun() {
 
 function startLevel(level) {
   buildMap();
-  player = new Entity(1.5, 1.5, 'DU', false, 0, 10);
+  player = new Entity(1.5, 1.5, 'DU', false, 0, 12);
   player.shootDirs = computeShootDirs(gameProgress.upgrades);
   player.healCharges = (gameProgress.upgrades.has('heal') && !gameProgress.healUsed) ? 1 : 0;
   aiList = [];
   for (let i=0; i<level; i++) {
     const sp = AI_SPAWNS[i];
-    aiList.push(new Entity(sp.x, sp.y, 'KI-'+(i+1), true, 1, 4));
+    aiList.push(new Entity(sp.x, sp.y, 'KI-'+(i+1), true, 1, 2));
   }
   projs=[]; gameState='playing';
   joy.L.active=false; joy.R.active=false;
