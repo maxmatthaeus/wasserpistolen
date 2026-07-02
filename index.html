@@ -791,7 +791,7 @@ const AI_SPAWNS = [
 ];
 let player, aiList, projs, gameState, lastT;
 let gameProgress = null;
-let resultType = null, resultStartTs = 0, resultReady = false;
+let resultType = null, resultStartTs = 0, resultReady = false, resultLevelsCleared = 0;
 
 function startNewRun() {
   gameProgress = { level: 1, upgrades: new Set(), healUsed: false };
@@ -817,6 +817,7 @@ function startResult(type) {
   resultType=type;
   resultStartTs=lastT;
   resultReady=false;
+  resultLevelsCleared = Math.max(0, gameProgress.level - 1);
 }
 
 function showMenu() { gameState = 'menu'; }
@@ -824,6 +825,16 @@ function showMenu() { gameState = 'menu'; }
 function getMenuButtons() {
   const bw=Math.min(320, CW*0.6), bh=Math.max(50, CH*0.09);
   return [{ key:'start', x:CW/2-bw/2, y:CH*0.55, w:bw, h:bh, label:'Spiel starten', col:'#22cc44' }];
+}
+
+function drawMenuGunArt(cx, cy, scale) {
+  ctx.fillStyle='#ffe000'; ctx.font=`${Math.max(12,scale*3)}px serif`; ctx.textAlign='center';
+  const pulse=(Math.sin(Date.now()*0.006)+1)/2;
+  ctx.globalAlpha = 0.6+pulse*0.4;
+  ctx.fillText('⚡', cx-scale*10, cy-scale*7);
+  ctx.fillText('⚡', cx+scale*13, cy-scale*4);
+  ctx.globalAlpha = 1;
+  drawGun(ctx, cx, cy, 0, false, scale);
 }
 
 function drawMenu() {
@@ -834,9 +845,11 @@ function drawMenu() {
 
   ctx.textAlign='center';
   ctx.fillStyle='#fff'; ctx.font=`bold ${Math.min(38,CW*0.055)}px monospace`;
-  ctx.fillText('💦 Wasserpistolen Battle', CW/2, CH*0.28);
+  ctx.fillText('💦 Wasserpistolen Battle', CW/2, CH*0.18);
   ctx.fillStyle='#aaa'; ctx.font=`${Math.min(16,CW*0.03)}px monospace`;
-  ctx.fillText('5 Level — von 1 bis 5 KI-Gegnern', CW/2, CH*0.28 + Math.min(30,CW*0.045));
+  ctx.fillText('5 Level — von 1 bis 5 KI-Gegnern', CW/2, CH*0.18 + Math.min(30,CW*0.045));
+
+  drawMenuGunArt(CW/2, CH*0.44, Math.min(CW,CH)*0.014);
 
   getMenuButtons().forEach(b => {
     ctx.fillStyle='rgba(255,255,255,0.06)';
@@ -936,6 +949,31 @@ function drawSunburst(t) {
   ctx.beginPath(); ctx.arc(sx,sy,r,0,Math.PI*2); ctx.fill();
 }
 
+function drawStar(cx, cy, r, filled) {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.beginPath();
+  for (let i=0; i<5; i++) {
+    const a1 = -Math.PI/2 + i*(Math.PI*2/5);
+    const a2 = a1 + Math.PI/5;
+    ctx.lineTo(Math.cos(a1)*r, Math.sin(a1)*r);
+    ctx.lineTo(Math.cos(a2)*r*0.42, Math.sin(a2)*r*0.42);
+  }
+  ctx.closePath();
+  ctx.fillStyle = filled ? '#ffd200' : 'rgba(255,255,255,0.15)';
+  ctx.fill();
+  ctx.strokeStyle = filled ? '#c99a00' : 'rgba(255,255,255,0.28)';
+  ctx.lineWidth = Math.max(1, r*0.08);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawStars(cx, cy, filled, total, r) {
+  const spacing = r*2.6;
+  const startX = cx - (total-1)*spacing/2;
+  for (let i=0; i<total; i++) drawStar(startX + i*spacing, cy, r, i<filled);
+}
+
 function drawResultScene(type, t) {
   const won = type==='won';
   const bg=ctx.createLinearGradient(0,0,0,CH);
@@ -968,6 +1006,12 @@ function drawResultScene(type, t) {
   ctx.fillText(won?'🏆 Alle 5 Level geschafft!':'💧 Verloren!', CW/2, CH*0.13);
   ctx.font=`${fs2*0.45}px monospace`;
   ctx.fillText(won?'Mitspieler geniesst die Sonne':'Mitspieler steht im Regen', CW/2, CH*0.13+fs2*0.6);
+
+  if (!won) {
+    ctx.fillStyle='#dfe6ee'; ctx.font=`bold ${Math.min(18,CW*0.024)}px monospace`;
+    ctx.fillText(`${resultLevelsCleared} von ${LEVELS} Levels geschafft`, CW/2, CH*0.24);
+    drawStars(CW/2, CH*0.3, resultLevelsCleared, LEVELS, Math.min(16, CW*0.02));
+  }
 }
 
 function drawLoadingBar(frac, ready) {
