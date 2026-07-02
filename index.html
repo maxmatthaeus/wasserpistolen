@@ -2,12 +2,16 @@
 <html lang="de">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Wasserpistolen Battle</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
+:root { --safe-bottom: env(safe-area-inset-bottom, 0px); --safe-top: env(safe-area-inset-top, 0px); }
 html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
 canvas { display: block; touch-action: none; }
 </style>
@@ -23,13 +27,20 @@ const G = 16;
 let CW, CH, TS, OX, OY, HUD_H, JOY_R, JOY_MAX, JOY_LX, JOY_LY, JOY_RX, JOY_RY;
 let HEAL_BTN_X, HEAL_BTN_Y, HEAL_BTN_R;
 
+function getSafeBottom() {
+  const v = getComputedStyle(document.documentElement).getPropertyValue('--safe-bottom');
+  const n = parseFloat(v);
+  return isNaN(n) ? 0 : n;
+}
+
 function resize() {
   CW = cv.width  = window.innerWidth;
   CH = cv.height = window.innerHeight;
+  const safeBottom = getSafeBottom();
   HUD_H = Math.round(CH * 0.085);
   JOY_R = Math.round(Math.min(CW, CH) * 0.08);
   JOY_MAX = JOY_R * 1.35;
-  const joyAreaH = JOY_R * 2 + 28;
+  const joyAreaH = JOY_R * 2 + 28 + safeBottom;
   const availW = CW * 0.92;
   const availH = CH - HUD_H - joyAreaH - 4;
   TS = Math.floor(Math.min(availW / G, availH / G));
@@ -38,7 +49,7 @@ function resize() {
   OY = HUD_H + (availH - TS * G) / 2 + 2;
   JOY_LX = CW * 0.17;
   JOY_RX = CW * 0.83;
-  JOY_LY = JOY_RY = CH - JOY_R - 14;
+  JOY_LY = JOY_RY = CH - JOY_R - 14 - safeBottom;
   HEAL_BTN_X = (JOY_LX + JOY_RX) / 2;
   HEAL_BTN_Y = JOY_LY;
   HEAL_BTN_R = JOY_R * 0.6;
@@ -46,6 +57,7 @@ function resize() {
 resize();
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 300));
+if (window.visualViewport) window.visualViewport.addEventListener('resize', resize);
 
 // ─── Map ─────────────────────────────────────────────────────
 const FLOOR = 0, WALL = 1, WATER = 2, OUTLET = 3, UPGRADE = 4;
