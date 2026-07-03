@@ -557,6 +557,10 @@ function tryHealButtonTap(px, py) {
 
 cv.addEventListener('touchstart', e => {
   e.preventDefault();
+  ensureAudio();
+  for (const t of e.changedTouches) {
+    if (muteBtnHit(t.clientX, t.clientY)) { toggleMute(); return; }
+  }
   if (gameState!=='playing') return;
   for (const t of e.changedTouches) {
     const tx=t.clientX, ty=t.clientY;
@@ -589,7 +593,9 @@ cv.addEventListener('touchend', e => {
 // ─── Keyboard ─────────────────────────────────────────────────
 const keys={};
 document.addEventListener('keydown', e => {
+  ensureAudio();
   const k=e.key.toLowerCase(); keys[k]=true;
+  if (k==='m') toggleMute();
   if (k==='r' && gameState!=='upgrade') startNewRun();
   if ((k===' '||k==='enter') && gameState==='playing') { const p=player.shoot(); if(p) projs.push(...p); }
   e.preventDefault();
@@ -605,7 +611,9 @@ function handleOverlayTap(px, py) {
 }
 
 cv.addEventListener('click', e => {
+  ensureAudio();
   const r=cv.getBoundingClientRect(); const px=e.clientX-r.left, py=e.clientY-r.top;
+  if (muteBtnHit(px,py)) { toggleMute(); return; }
   if (handleOverlayTap(px,py)) return;
   if (gameState!=='playing') return;
   if (tryHealButtonTap(px,py)) return;
@@ -628,14 +636,15 @@ function drawHUD() {
   const fs=Math.max(9, Math.round(HUD_H*0.2));
   const bh=Math.max(5, HUD_H*0.09);
 
-  // Player (left)
+  // Player (left) — Text startet erst nach dem Mute-Knopf (oben links)
+  const hx = 42;
   ctx.textAlign='left'; ctx.font=`bold ${fs+1}px monospace`;
   ctx.fillStyle=COL.teamPlayer;
-  ctx.fillText(`🟢 DU  ${player.alive?'♥'+player.lives:'☠'}`, 8, HUD_H*0.3);
+  ctx.fillText(`🟢 DU  ${player.alive?'♥'+player.lives:'☠'}`, hx, HUD_H*0.3);
   const bw0=Math.max(60, CW*0.16);
-  miniBar(8, HUD_H*0.38, bw0, bh, player.alive?player.lives/player.maxLives:0, '#e0154e');
-  miniBar(8, HUD_H*0.38+bh+3, bw0, bh, player.water/CONFIG.waterMax, '#0099ff');
-  miniBar(8, HUD_H*0.38+(bh+3)*2, bw0, bh, player.charge/CONFIG.chargeMax, '#ffdd00');
+  miniBar(hx, HUD_H*0.38, bw0, bh, player.alive?player.lives/player.maxLives:0, '#e0154e');
+  miniBar(hx, HUD_H*0.38+bh+3, bw0, bh, player.water/CONFIG.waterMax, '#0099ff');
+  miniBar(hx, HUD_H*0.38+(bh+3)*2, bw0, bh, player.charge/CONFIG.chargeMax, '#ffdd00');
 
   // Enemies (right) — compact row, scales with AI count
   const n = aiList.length;
@@ -1073,21 +1082,197 @@ function drawLoadingBar(frac, ready) {
   ctx.fillText(ready ? 'Tippen für ein neues Spiel' : 'Nächstes Spiel lädt…', CW/2, by+bh+22);
 }
 
+// ─── Musik (synthetisiert per Web Audio, keine externen Dateien) ──
+let actx = null, masterGain = null, noiseBuffer = null;
+let currentTrackKey = null, schedulerId = null, nextLoopTime = 0;
+
+function loadMutePref() {
+  try { return localStorage.getItem('wp_muted') === '1'; } catch (e) { return false; }
+}
+function saveMutePref(v) {
+  try { localStorage.setItem('wp_muted', v ? '1' : '0'); } catch (e) {}
+}
+let musicMuted = loadMutePref();
+
+function ensureAudio() {
+  if (!actx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    actx = new AC();
+    masterGain = actx.createGain();
+    masterGain.gain.value = 0.35;
+    masterGain.connect(actx.destination);
+  }
+  if (actx.state === 'suspended') actx.resume().catch(()=>{});
+  return actx;
+}
+
+function noteFreq(midi) { return 440 * Math.pow(2, (midi-69)/12); }
+
+function playTone(freq, startTime, duration, {type='square', gain=0.06}={}) {
+  const osc = actx.createOscillator();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, startTime);
+  const g = actx.createGain();
+  const atk = Math.min(0.015, duration*0.3), rel = Math.min(0.05, duration*0.3);
+  g.gain.setValueAtTime(0, startTime);
+  g.gain.linearRampToValueAtTime(gain, startTime+atk);
+  g.gain.setValueAtTime(gain, Math.max(startTime+atk, startTime+duration-rel));
+  g.gain.linearRampToValueAtTime(0, startTime+duration);
+  osc.connect(g); g.connect(masterGain);
+  osc.start(startTime); osc.stop(startTime+duration+0.02);
+}
+
+function getNoiseBuffer() {
+  if (!noiseBuffer) {
+    const len = actx.sampleRate * 0.5;
+    noiseBuffer = actx.createBuffer(1, len, actx.sampleRate);
+    const data = noiseBuffer.getChannelData(0);
+    for (let i=0; i<len; i++) data[i] = Math.random()*2-1;
+  }
+  return noiseBuffer;
+}
+function playHat(time) {
+  const src = actx.createBufferSource(); src.buffer = getNoiseBuffer();
+  const hp = actx.createBiquadFilter(); hp.type='highpass'; hp.frequency.value=6000;
+  const g = actx.createGain();
+  g.gain.setValueAtTime(0.05, time);
+  g.gain.exponentialRampToValueAtTime(0.001, time+0.03);
+  src.connect(hp); hp.connect(g); g.connect(masterGain);
+  src.start(time); src.stop(time+0.04);
+}
+function playKick(time) {
+  const osc = actx.createOscillator(); osc.type='sine';
+  osc.frequency.setValueAtTime(140, time);
+  osc.frequency.exponentialRampToValueAtTime(45, time+0.12);
+  const g = actx.createGain();
+  g.gain.setValueAtTime(0.35, time);
+  g.gain.exponentialRampToValueAtTime(0.001, time+0.15);
+  osc.connect(g); g.connect(masterGain);
+  osc.start(time); osc.stop(time+0.16);
+}
+
+// Fröhlicher Arcade-Loop (Menü/Spiel/Upgrade), Sieges-Fanfare, getragene Regen-Melodie.
+const TRACKS = {
+  theme: {
+    bpm: 140,
+    melody: [
+      [60,1],[64,1],[67,1],[64,1],
+      [57,1],[60,1],[64,1],[60,1],
+      [53,1],[57,1],[60,1],[57,1],
+      [55,1],[59,1],[62,1],[59,1],
+    ],
+    bass: [ [48,4],[45,4],[41,4],[43,4] ],
+    drums: ['k','h','h','h','k','h','h','h','k','h','h','h','k','h','h','h',
+             'k','h','h','h','k','h','h','h','k','h','h','h','k','h','h','h'],
+  },
+  won: {
+    bpm: 150,
+    melody: [ [72,0.5],[76,0.5],[79,0.5],[84,1.5],[79,0.5],[76,0.5],[72,1],[76,0.5],[79,1.5] ],
+  },
+  lost: {
+    bpm: 66,
+    melody: [ [57,2],[55,1],[53,1],[52,2],[50,1],[48,1] ],
+  },
+};
+
+function scheduleTrack(track, startTime) {
+  const beatDur = 60/track.bpm;
+  const totalDur = track.melody.reduce((s,[,b])=>s+b, 0) * beatDur;
+
+  let t = startTime;
+  track.melody.forEach(([midi,beats]) => {
+    playTone(noteFreq(midi), t, beats*beatDur*0.85, {type:'square', gain:0.05});
+    t += beats*beatDur;
+  });
+
+  if (track.bass) {
+    t = startTime;
+    track.bass.forEach(([midi,beats]) => {
+      playTone(noteFreq(midi), t, beats*beatDur*0.9, {type:'triangle', gain:0.08});
+      t += beats*beatDur;
+    });
+  }
+
+  if (track.drums) {
+    t = startTime;
+    track.drums.forEach(hit => {
+      if (hit==='k') playKick(t); else if (hit==='h') playHat(t);
+      t += beatDur*0.5;
+    });
+  }
+
+  return totalDur;
+}
+
+function schedulerTick() {
+  const track = TRACKS[currentTrackKey];
+  while (nextLoopTime < actx.currentTime + 0.5) {
+    nextLoopTime += scheduleTrack(track, nextLoopTime);
+  }
+}
+
+function playLoop(trackKey) {
+  const audio = ensureAudio();
+  if (audio.state !== 'running') return; // wird im nächsten Frame erneut versucht
+  stopMusic();
+  currentTrackKey = trackKey;
+  nextLoopTime = audio.currentTime + 0.05;
+  schedulerTick();
+  schedulerId = setInterval(schedulerTick, 100);
+}
+
+function stopMusic() {
+  if (schedulerId) { clearInterval(schedulerId); schedulerId = null; }
+  currentTrackKey = null;
+}
+
+function musicForState() {
+  if (gameState === 'result') return resultType === 'won' ? 'won' : 'lost';
+  if (gameState === 'playing' || gameState === 'upgrade' || gameState === 'menu') return 'theme';
+  return null;
+}
+
+function updateMusic() {
+  const wanted = musicMuted ? null : musicForState();
+  if (!actx || actx.state !== 'running') return;
+  if (wanted !== currentTrackKey) {
+    if (wanted) playLoop(wanted); else stopMusic();
+  }
+}
+
+function toggleMute() { musicMuted = !musicMuted; saveMutePref(musicMuted); }
+
+// ─── Mute-Knopf (immer oben links sichtbar) ────────────────────
+const MUTE_BTN = { cx: 22, cy: 22, r: 14 };
+function muteBtnHit(px, py) { return Math.hypot(px-MUTE_BTN.cx, py-MUTE_BTN.cy) <= MUTE_BTN.r; }
+function drawMuteButton() {
+  ctx.beginPath(); ctx.arc(MUTE_BTN.cx, MUTE_BTN.cy, MUTE_BTN.r, 0, Math.PI*2);
+  ctx.fillStyle='rgba(0,0,0,0.45)'; ctx.fill();
+  ctx.strokeStyle='rgba(255,255,255,0.3)'; ctx.lineWidth=1.5; ctx.stroke();
+  ctx.font=`${MUTE_BTN.r*1.3}px sans-serif`; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillStyle='#fff';
+  ctx.fillText(musicMuted ? '🔇' : '🔊', MUTE_BTN.cx, MUTE_BTN.cy+1);
+  ctx.textBaseline='alphabetic';
+}
+
 // ─── Main Loop ────────────────────────────────────────────────
 let mouse={x:CW/2,y:CH/2};
 cv.addEventListener('mousemove',e=>{mouse.x=e.clientX;mouse.y=e.clientY;});
 
 function loop(ts) {
   const dt=Math.min((ts-(lastT||ts))/1000,0.05); lastT=ts;
+  updateMusic();
 
   if (gameState==='menu') {
     drawMenu();
+    drawMuteButton();
     requestAnimationFrame(loop);
     return;
   }
 
   if (gameState==='upgrade') {
     drawUpgradeScreen();
+    drawMuteButton();
     requestAnimationFrame(loop);
     return;
   }
@@ -1098,6 +1283,7 @@ function loop(ts) {
     const frac = Math.min(1, elapsed/CONFIG.resultPause);
     resultReady = elapsed >= CONFIG.resultPause;
     drawLoadingBar(frac, resultReady);
+    drawMuteButton();
     requestAnimationFrame(loop);
     return;
   }
@@ -1173,6 +1359,7 @@ function loop(ts) {
   drawJoysticks();
   drawHealButton();
   drawHUD();
+  drawMuteButton();
 
   requestAnimationFrame(loop);
 }
