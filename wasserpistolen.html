@@ -584,6 +584,7 @@ cv.addEventListener('touchmove', e => {
 
 cv.addEventListener('touchend', e => {
   e.preventDefault();
+  ensureAudio(); // manche iOS-Versionen schalten Web Audio erst bei touchend frei
   for (const t of e.changedTouches) {
     if (t.identifier===joy.L.id) joy.L.active=false;
     if (t.identifier===joy.R.id) joy.R.active=false;
@@ -1099,7 +1100,7 @@ function ensureAudio() {
     const AC = window.AudioContext || window.webkitAudioContext;
     actx = new AC();
     masterGain = actx.createGain();
-    masterGain.gain.value = 0.35;
+    masterGain.gain.value = 0.55;
     masterGain.connect(actx.destination);
   }
   if (actx.state === 'suspended') actx.resume().catch(()=>{});
@@ -1181,14 +1182,14 @@ function scheduleTrack(track, startTime) {
 
   let t = startTime;
   track.melody.forEach(([midi,beats]) => {
-    playTone(noteFreq(midi), t, beats*beatDur*0.85, {type:'square', gain:0.05});
+    playTone(noteFreq(midi), t, beats*beatDur*0.85, {type:'square', gain:0.09});
     t += beats*beatDur;
   });
 
   if (track.bass) {
     t = startTime;
     track.bass.forEach(([midi,beats]) => {
-      playTone(noteFreq(midi), t, beats*beatDur*0.9, {type:'triangle', gain:0.08});
+      playTone(noteFreq(midi), t, beats*beatDur*0.9, {type:'triangle', gain:0.13});
       t += beats*beatDur;
     });
   }
@@ -1366,6 +1367,7 @@ function loop(ts) {
 
 // Tap on menu / upgrade buttons, tap to start new game after result screen
 cv.addEventListener('touchend', e => {
+  ensureAudio();
   if (gameState==='playing') return; // Joystick-Release wird vom Listener oben behandelt
   e.preventDefault();
   const r=cv.getBoundingClientRect();
